@@ -127,7 +127,7 @@ class TogglDataImporter extends DefaultImporter
                 if ($project->client_id !== null) {
                     $clientId = $this->clientImportHelper->getKeyByExternalIdentifier((string) $project->client_id);
                     if ($clientId === null) {
-                        throw new Exception('Client does not exist');
+                        throw new ImportException('Client with ID ' . $project->client_id . ' referenced by project "' . $project->name . '" does not exist');
                     }
                 }
 
@@ -197,13 +197,13 @@ class TogglDataImporter extends DefaultImporter
                 }
             }
         } catch (ValueError $exception) {
-            report($exception); // Add this to log the actual error
+            report($exception);
             throw new ImportException('Invalid value in import data: ' . $exception->getMessage());
         } catch (ImportException $exception) {
             throw $exception;
         } catch (Exception $exception) {
             report($exception);
-            throw new ImportException('Unknown error');
+            throw new ImportException('Unknown error: ' . $exception->getMessage());
         } finally {
             $temporaryDirectory?->delete();
             $temporaryDirectoryZip?->delete();
