@@ -31,7 +31,7 @@ class TogglDataImporter extends DefaultImporter
             file_put_contents($temporaryDirectoryZip->path('import.zip'), $data);
             $res = $zip->open($temporaryDirectoryZip->path('import.zip'), ZipArchive::RDONLY);
             if ($res !== true) {
-                throw new ImportException('Invalid ZIP, error code: '.$res);
+                throw new ImportException('Invalid ZIP, error code: ' . $res);
             }
             $temporaryDirectory = TemporaryDirectory::make();
             $zip->extractTo($temporaryDirectory->path());
@@ -146,16 +146,16 @@ class TogglDataImporter extends DefaultImporter
                     'billable_rate' => $project->rate !== null ? (int) ($project->rate * 100) : null,
                 ], (string) $project->id);
 
-                if (! file_exists($temporaryDirectory->path('projects_users/'.$project->id.'.json'))) {
-                    throw new ImportException('File "projects_users/'.$project->id.'.json" missing in ZIP');
+                if (! file_exists($temporaryDirectory->path('projects_users/' . $project->id . '.json'))) {
+                    throw new ImportException('File "projects_users/' . $project->id . '.json" missing in ZIP');
                 }
-                $projectMembersFileContent = file_get_contents($temporaryDirectory->path('projects_users/'.$project->id.'.json'));
+                $projectMembersFileContent = file_get_contents($temporaryDirectory->path('projects_users/' . $project->id . '.json'));
                 if ($projectMembersFileContent === false) {
-                    throw new ImportException('File "projects_users/'.$project->id.'.json" can not be opened');
+                    throw new ImportException('File "projects_users/' . $project->id . '.json" can not be opened');
                 }
                 $projectMembers = json_decode($projectMembersFileContent);
                 if ($projectMembers === null) {
-                    throw new ImportException('File "projects_users/'.$project->id.'.json" is empty');
+                    throw new ImportException('File "projects_users/' . $project->id . '.json" is empty');
                 }
                 foreach ($projectMembers as $projectMember) {
                     $userId = $this->userImportHelper->getKeyByExternalIdentifier((string) $projectMember->user_id);
@@ -170,16 +170,16 @@ class TogglDataImporter extends DefaultImporter
             }
             $projectIds = $this->projectImportHelper->getExternalIds();
             foreach ($projectIds as $projectIdExternal) {
-                if (! file_exists($temporaryDirectory->path('tasks/'.$projectIdExternal.'.json'))) {
+                if (! file_exists($temporaryDirectory->path('tasks/' . $projectIdExternal . '.json'))) {
                     continue;
                 }
-                $tasksFileContent = file_get_contents($temporaryDirectory->path('tasks/'.$projectIdExternal.'.json'));
+                $tasksFileContent = file_get_contents($temporaryDirectory->path('tasks/' . $projectIdExternal . '.json'));
                 if ($tasksFileContent === false) {
-                    throw new ImportException('File "tasks/'.$projectIdExternal.'.json" can not be opened');
+                    throw new ImportException('File "tasks/' . $projectIdExternal . '.json" can not be opened');
                 }
                 $tasks = json_decode($tasksFileContent);
                 if ($tasks === null) {
-                    throw new ImportException('File "tasks/'.$projectIdExternal.'.json" is empty');
+                    throw new ImportException('File "tasks/' . $projectIdExternal . '.json" is empty');
                 }
                 foreach ($tasks as $task) {
                     $projectId = $this->projectImportHelper->getKeyByExternalIdentifier((string) $projectIdExternal);
@@ -197,7 +197,8 @@ class TogglDataImporter extends DefaultImporter
                 }
             }
         } catch (ValueError $exception) {
-
+            report($exception); // Add this to log the actual error
+            throw new ImportException('Invalid value in import data: ' . $exception->getMessage());
         } catch (ImportException $exception) {
             throw $exception;
         } catch (Exception $exception) {
