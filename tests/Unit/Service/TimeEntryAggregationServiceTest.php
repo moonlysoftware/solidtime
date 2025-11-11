@@ -5,18 +5,18 @@ declare(strict_types=1);
 namespace Tests\Unit\Service;
 
 use App\Enums\TimeEntryAggregationType;
+use App\Enums\TimeEntryRoundingType;
 use App\Enums\Weekday;
 use App\Models\Client;
 use App\Models\Project;
+use App\Models\Tag;
 use App\Models\TimeEntry;
 use App\Service\TimeEntryAggregationService;
 use Illuminate\Support\Carbon;
 use PHPUnit\Framework\Attributes\CoversClass;
-use PHPUnit\Framework\Attributes\UsesClass;
 use Tests\TestCaseWithDatabase;
 
 #[CoversClass(TimeEntryAggregationService::class)]
-#[UsesClass(TimeEntryAggregationService::class)]
 class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
 {
     private TimeEntryAggregationService $service;
@@ -42,7 +42,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             false,
             null,
             null,
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -89,7 +91,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             false,
             Carbon::now()->subDays(2)->utc(),
             Carbon::now()->subDay()->utc(),
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -174,7 +178,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             false,
             Carbon::now()->subDays(2)->utc(),
             Carbon::now()->subDay()->utc(),
-            false
+            false,
+            null,
+            null
         );
 
         // Assert
@@ -240,7 +246,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             true,
             Carbon::now()->subDays(2)->utc(),
             Carbon::now()->subDay()->utc(),
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -282,7 +290,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             true,
             Carbon::now()->subDays(2),
             Carbon::now()->subDay(),
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -309,7 +319,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             true,
             Carbon::now()->subDays(2),
             Carbon::now()->subDay(),
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -345,7 +357,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             false,
             null,
             null,
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -410,6 +424,302 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
         ], $result);
     }
 
+    public function test_aggregate_time_can_round_up_per_time_entry(): void
+    {
+        // Arrange
+        $client1 = Client::factory()->create();
+        $client2 = Client::factory()->create();
+        $project1 = Project::factory()->forClient($client1)->create();
+        $project2 = Project::factory()->forClient($client2)->create();
+        $project3 = Project::factory()->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 450)
+            ->forProject($project1)->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 449)
+            ->forProject($project1)->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 451)
+            ->forProject($project2)->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 450)
+            ->forProject($project3)
+            ->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 449)
+            ->create();
+        $query = TimeEntry::query();
+
+        // Act
+        $result = $this->service->getAggregatedTimeEntries(
+            $query,
+            TimeEntryAggregationType::Client,
+            TimeEntryAggregationType::Project,
+            'Europe/Vienna',
+            Weekday::Monday,
+            false,
+            null,
+            null,
+            true,
+            TimeEntryRoundingType::Up,
+            15
+        );
+
+        // Assert
+        $this->assertEqualsCanonicalizing([
+            'seconds' => 4500,
+            'cost' => 0,
+            'grouped_type' => 'client',
+            'grouped_data' => [
+                [
+                    'key' => null,
+                    'seconds' => 1800,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => null,
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                        [
+                            'key' => $project3->getKey(),
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+                [
+                    'key' => $client1->getKey(),
+                    'seconds' => 1800,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => $project1->getKey(),
+                            'seconds' => 1800,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+                [
+                    'key' => $client2->getKey(),
+                    'seconds' => 900,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => $project2->getKey(),
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+            ],
+        ], $result);
+    }
+
+    public function test_aggregate_time_can_round_down_per_time_entry(): void
+    {
+        // Arrange
+        $client1 = Client::factory()->create();
+        $client2 = Client::factory()->create();
+        $project1 = Project::factory()->forClient($client1)->create();
+        $project2 = Project::factory()->forClient($client2)->create();
+        $project3 = Project::factory()->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 450)
+            ->forProject($project1)->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 449)
+            ->forProject($project1)->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 451)
+            ->forProject($project2)->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 900 + 450)
+            ->forProject($project3)
+            ->create();
+        TimeEntry::factory()->endWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'), 900 + 449)
+            ->create();
+        $query = TimeEntry::query();
+
+        // Act
+        $result = $this->service->getAggregatedTimeEntries(
+            $query,
+            TimeEntryAggregationType::Client,
+            TimeEntryAggregationType::Project,
+            'Europe/Vienna',
+            Weekday::Monday,
+            false,
+            null,
+            null,
+            true,
+            TimeEntryRoundingType::Down,
+            15
+        );
+
+        // Assert
+        $this->assertEqualsCanonicalizing([
+            'seconds' => 1800,
+            'cost' => 0,
+            'grouped_type' => 'client',
+            'grouped_data' => [
+                [
+                    'key' => null,
+                    'seconds' => 1800,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => null,
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                        [
+                            'key' => $project3->getKey(),
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+                [
+                    'key' => $client1->getKey(),
+                    'seconds' => 0,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => $project1->getKey(),
+                            'seconds' => 0,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+                [
+                    'key' => $client2->getKey(),
+                    'seconds' => 0,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => $project2->getKey(),
+                            'seconds' => 0,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+            ],
+        ], $result);
+    }
+
+    public function test_aggregate_time_can_round_to_nearest_per_time_entry(): void
+    {
+        // Arrange
+        $client1 = Client::factory()->create();
+        $client2 = Client::factory()->create();
+        $project1 = Project::factory()->forClient($client1)->create();
+        $project2 = Project::factory()->forClient($client2)->create();
+        $project3 = Project::factory()->create();
+        TimeEntry::factory()->startWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:00'), 449)
+            ->forProject($project1)->create();
+        TimeEntry::factory()->startWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:00'), 450)
+            ->forProject($project1)->create();
+        TimeEntry::factory()->startWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:00'), 450)
+            ->forProject($project2)->create();
+        TimeEntry::factory()->startWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:00'), 450)
+            ->forProject($project3)
+            ->create();
+        TimeEntry::factory()->startWithDuration(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:00'), 450)
+            ->create();
+        $query = TimeEntry::query();
+
+        // Act
+        $result = $this->service->getAggregatedTimeEntries(
+            $query,
+            TimeEntryAggregationType::Client,
+            TimeEntryAggregationType::Project,
+            'Europe/Vienna',
+            Weekday::Monday,
+            false,
+            null,
+            null,
+            true,
+            TimeEntryRoundingType::Nearest,
+            15
+        );
+
+        // Assert
+        $this->assertEqualsCanonicalizing([
+            'seconds' => 3600,
+            'cost' => 0,
+            'grouped_type' => 'client',
+            'grouped_data' => [
+                [
+                    'key' => null,
+                    'seconds' => 1800,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => null,
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                        [
+                            'key' => $project3->getKey(),
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+                [
+                    'key' => $client1->getKey(),
+                    'seconds' => 900,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => $project1->getKey(),
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+                [
+                    'key' => $client2->getKey(),
+                    'seconds' => 900,
+                    'cost' => 0,
+                    'grouped_type' => 'project',
+                    'grouped_data' => [
+                        [
+                            'key' => $project2->getKey(),
+                            'seconds' => 900,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+            ],
+        ], $result);
+    }
+
+    // TODO: test with 1 minute
+
     public function test_aggregate_time_entries_by_client_and_project_with_filled_gaps(): void
     {
         // Arrange
@@ -434,7 +744,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             true,
             null,
             null,
-            true
+            true,
+            null,
+            null
         );
 
         // Assert
@@ -530,7 +842,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             false,
             null,
             null,
-            true
+            true,
+            null,
+            null,
         );
 
         // Assert
@@ -614,7 +928,9 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
             false,
             null,
             null,
-            true
+            true,
+            null,
+            null,
         );
 
         // Assert
@@ -691,5 +1007,202 @@ class TimeEntryAggregationServiceTest extends TestCaseWithDatabase
                 ],
             ],
         ], $result);
+    }
+
+    public function test_aggregate_time_entries_group_by_tag_includes_no_tag_and_avoids_double_counting_overall(): void
+    {
+        // Arrange
+        $tag1 = Tag::factory()->create();
+        $tag2 = Tag::factory()->create();
+        $start = Carbon::now();
+
+        // One entry with two tags (100s)
+        TimeEntry::factory()->startWithDuration($start, 100)->create([
+            'tags' => [$tag1->getKey(), $tag2->getKey()],
+        ]);
+        // One entry with one tag (50s)
+        TimeEntry::factory()->startWithDuration($start, 50)->create([
+            'tags' => [$tag1->getKey()],
+        ]);
+        // One entry with no tags (25s)
+        TimeEntry::factory()->startWithDuration($start, 25)->create([
+            'tags' => [],
+        ]);
+
+        $query = TimeEntry::query();
+
+        // Act
+        $result = $this->service->getAggregatedTimeEntries(
+            $query,
+            TimeEntryAggregationType::Tag,
+            null,
+            'Europe/Vienna',
+            Weekday::Monday,
+            false,
+            null,
+            null,
+            true,
+            null,
+            null
+        );
+
+        // Assert - overall total should be 175 and groups: null=25, tag1=150, tag2=100
+        $expected = [
+            'seconds' => 175,
+            'cost' => 0,
+            'grouped_type' => 'tag',
+            'grouped_data' => [
+                [
+                    'key' => null,
+                    'seconds' => 25,
+                    'cost' => 0,
+                    'grouped_type' => null,
+                    'grouped_data' => null,
+                ],
+                [
+                    'key' => $tag1->getKey(),
+                    'seconds' => 150,
+                    'cost' => 0,
+                    'grouped_type' => null,
+                    'grouped_data' => null,
+                ],
+                [
+                    'key' => $tag2->getKey(),
+                    'seconds' => 100,
+                    'cost' => 0,
+                    'grouped_type' => null,
+                    'grouped_data' => null,
+                ],
+            ],
+        ];
+        $this->assertEqualsCanonicalizing($expected, $result);
+    }
+
+    public function test_aggregate_time_entries_group_by_project_and_subgroup_tag(): void
+    {
+        // Arrange
+        $project = Project::factory()->create();
+        $tag1 = Tag::factory()->create();
+        $tag2 = Tag::factory()->create();
+        $start = Carbon::now();
+
+        TimeEntry::factory()->startWithDuration($start, 120)->forProject($project)->create([
+            'tags' => [$tag1->getKey()],
+        ]);
+        TimeEntry::factory()->startWithDuration($start, 60)->forProject($project)->create([
+            'tags' => [$tag2->getKey()],
+        ]);
+
+        $query = TimeEntry::query();
+
+        // Act
+        $result = $this->service->getAggregatedTimeEntries(
+            $query,
+            TimeEntryAggregationType::Project,
+            TimeEntryAggregationType::Tag,
+            'Europe/Vienna',
+            Weekday::Monday,
+            false,
+            null,
+            null,
+            true,
+            null,
+            null
+        );
+
+        // Assert
+        $expected = [
+            'seconds' => 180,
+            'cost' => 0,
+            'grouped_type' => 'project',
+            'grouped_data' => [
+                [
+                    'key' => $project->getKey(),
+                    'seconds' => 180,
+                    'cost' => 0,
+                    'grouped_type' => 'tag',
+                    'grouped_data' => [
+                        [
+                            'key' => $tag1->getKey(),
+                            'seconds' => 120,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                        [
+                            'key' => $tag2->getKey(),
+                            'seconds' => 60,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+        $this->assertEqualsCanonicalizing($expected, $result);
+    }
+
+    public function test_aggregate_time_entries_group_by_project_and_subgroup_tag_avoids_double_counting(): void
+    {
+        // Arrange
+        $project = Project::factory()->create();
+        $tag1 = Tag::factory()->create();
+        $tag2 = Tag::factory()->create();
+        $start = Carbon::now();
+
+        // One entry with two tags => subgroup rows show both tags, but project total should equal entry duration
+        TimeEntry::factory()->startWithDuration($start, 100)->forProject($project)->create([
+            'tags' => [$tag1->getKey(), $tag2->getKey()],
+        ]);
+
+        $query = TimeEntry::query();
+
+        // Act
+        $result = $this->service->getAggregatedTimeEntries(
+            $query,
+            TimeEntryAggregationType::Project,
+            TimeEntryAggregationType::Tag,
+            'Europe/Vienna',
+            Weekday::Monday,
+            false,
+            null,
+            null,
+            true,
+            null,
+            null
+        );
+
+        // Assert
+        $expected = [
+            'seconds' => 100,
+            'cost' => 0,
+            'grouped_type' => 'project',
+            'grouped_data' => [
+                [
+                    'key' => $project->getKey(),
+                    'seconds' => 100,
+                    'cost' => 0,
+                    'grouped_type' => 'tag',
+                    'grouped_data' => [
+                        [
+                            'key' => $tag1->getKey(),
+                            'seconds' => 100,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                        [
+                            'key' => $tag2->getKey(),
+                            'seconds' => 100,
+                            'cost' => 0,
+                            'grouped_type' => null,
+                            'grouped_data' => null,
+                        ],
+                    ],
+                ],
+            ],
+        ];
+        $this->assertEqualsCanonicalizing($expected, $result);
     }
 }

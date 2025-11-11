@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Laravel\Jetstream\Events\TeamCreated;
@@ -47,7 +48,7 @@ use OwenIt\Auditing\Contracts\Auditable as AuditableContract;
  * @property IntervalFormat $interval_format
  * @property TimeFormat $time_format
  *
- * @method HasMany<OrganizationInvitation> teamInvitations()
+ * @method HasMany<OrganizationInvitation, $this> teamInvitations()
  * @method static OrganizationFactory factory()
  */
 class Organization extends JetstreamTeam implements AuditableContract
@@ -69,6 +70,7 @@ class Organization extends JetstreamTeam implements AuditableContract
         'personal_team' => 'boolean',
         'currency' => 'string',
         'employees_can_see_billable_rates' => 'boolean',
+        'prevent_overlapping_time_entries' => 'boolean',
         'number_format' => NumberFormat::class,
         'currency_format' => CurrencyFormat::class,
         'date_format' => DateFormat::class,
@@ -79,7 +81,7 @@ class Organization extends JetstreamTeam implements AuditableContract
     /**
      * The attributes that are mass assignable.
      *
-     * @var array<int, string>
+     * @var list<string>
      */
     protected $fillable = [
         'name',
@@ -125,7 +127,7 @@ class Organization extends JetstreamTeam implements AuditableContract
     /**
      * Get all the users that belong to the team.
      *
-     * @return BelongsToMany<User>
+     * @return BelongsToMany<User, $this, Pivot, 'membership'>
      */
     public function users(): BelongsToMany
     {
@@ -142,7 +144,7 @@ class Organization extends JetstreamTeam implements AuditableContract
     /**
      * Get the owner of the team.
      *
-     * @return BelongsTo<User, Organization>
+     * @return BelongsTo<User, $this>
      */
     public function owner(): BelongsTo
     {
@@ -150,7 +152,7 @@ class Organization extends JetstreamTeam implements AuditableContract
     }
 
     /**
-     * @return HasMany<Member>
+     * @return HasMany<Member, $this>
      */
     public function members(): HasMany
     {
@@ -158,7 +160,7 @@ class Organization extends JetstreamTeam implements AuditableContract
     }
 
     /**
-     * @return BelongsToMany<User>
+     * @return BelongsToMany<User, $this, Pivot, 'membership'>
      */
     public function realUsers(): BelongsToMany
     {

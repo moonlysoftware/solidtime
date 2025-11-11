@@ -7,6 +7,7 @@ namespace App\Http\Controllers\Api\V1;
 use App\Enums\ExportFormat;
 use App\Enums\Role;
 use App\Exceptions\Api\FeatureIsNotAvailableInFreePlanApiException;
+use App\Exceptions\Api\OverlappingTimeEntryApiException;
 use App\Exceptions\Api\PdfRendererIsNotConfiguredException;
 use App\Exceptions\Api\TimeEntryCanNotBeRestartedApiException;
 use App\Exceptions\Api\TimeEntryStillRunningApiException;
@@ -33,6 +34,7 @@ use App\Service\ReportExport\TimeEntriesDetailedExport;
 use App\Service\ReportExport\TimeEntriesReportExport;
 use App\Service\TimeEntryAggregationService;
 use App\Service\TimeEntryFilter;
+use App\Service\TimeEntryService;
 use App\Service\TimezoneService;
 use Gotenberg\Exceptions\GotenbergApiErrored;
 use Gotenberg\Exceptions\NoOutputFileInResponse;
@@ -44,9 +46,11 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\File;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
@@ -54,6 +58,43 @@ use Spatie\TemporaryDirectory\TemporaryDirectory;
 
 class TimeEntryController extends Controller
 {
+    private function assertNoOverlap(Organization $organization, Member $member, \Illuminate\Support\Carbon $start, ?\Illuminate\Support\Carbon $end, ?TimeEntry $exclude = null): void
+    {
+        if (! $organization->prevent_overlapping_time_entries) {
+            return;
+        }
+
+        $query = TimeEntry::query()
+            ->where('organization_id', $organization->getKey())
+            ->where('user_id', $member->user_id)
+            ->when($exclude !== null, function (Builder $q) use ($exclude): void {
+                $q->where('id', '!=', $exclude->getKey());
+            })
+            ->where(function (Builder $q) use ($start, $end): void {
+                $q->where(function (Builder $q2) use ($start): void {
+                    $q2->where('end', '>', $start)
+                        ->where('start', '<', $start);
+                });
+
+                if ($end !== null) {
+                    $q->orWhere(function (Builder $q4) use ($end): void {
+                        $q4->where('start', '<', $end)
+                            ->where('end', '>', $end);
+                    });
+                    // Check if the new entry completely surrounds an existing entry
+                    $q->orWhere(function (Builder $q6) use ($start, $end): void {
+                        $q6->where('start', '>=', $start)
+                            ->where('end', '<=', $end);
+                    });
+                }
+
+            });
+
+        if ($query->exists()) {
+            throw new OverlappingTimeEntryApiException;
+        }
+    }
+
     protected function checkPermission(Organization $organization, string $permission, ?TimeEntry $timeEntry = null): void
     {
         parent::checkPermission($organization, $permission);
@@ -84,7 +125,8 @@ class TimeEntryController extends Controller
             $this->checkPermission($organization, 'time-entries:view:all');
         }
 
-        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $member);
+        $canAccessPremiumFeatures = $this->canAccessPremiumFeatures($organization);
+        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $member, $canAccessPremiumFeatures);
 
         $totalCount = $timeEntriesQuery->count();
 
@@ -138,10 +180,19 @@ class TimeEntryController extends Controller
     /**
      * @return Builder<TimeEntry>
      */
-    private function getTimeEntriesQuery(Organization $organization, TimeEntryIndexRequest|TimeEntryIndexExportRequest $request, ?Member $member): Builder
+    private function getTimeEntriesQuery(Organization $organization, TimeEntryIndexRequest|TimeEntryIndexExportRequest $request, ?Member $member, bool $canAccessPremiumFeatures): Builder
     {
+        $select = TimeEntry::SELECT_COLUMNS;
+        $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
+        $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
+        if ($roundingType !== null && $roundingMinutes !== null) {
+            $select = array_diff($select, ['start', 'end']);
+            $select[] = DB::raw(app(TimeEntryService::class)->getStartSelectRawForRounding($roundingType, $roundingMinutes).' as start');
+            $select[] = DB::raw(app(TimeEntryService::class)->getEndSelectRawForRounding($roundingType, $roundingMinutes).' as end');
+        }
         $timeEntriesQuery = TimeEntry::query()
             ->whereBelongsTo($organization, 'organization')
+            ->select($select)
             ->orderBy('start', 'desc');
 
         $filter = new TimeEntryFilter($timeEntriesQuery);
@@ -175,16 +226,19 @@ class TimeEntryController extends Controller
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
         }
+        $canAccessPremiumFeatures = $this->canAccessPremiumFeatures($organization);
         $debug = $request->getDebug();
         $format = $request->getFormatValue();
-        if ($format === ExportFormat::PDF && ! $this->canAccessPremiumFeatures($organization)) {
+        if ($format === ExportFormat::PDF && ! $canAccessPremiumFeatures) {
             throw new FeatureIsNotAvailableInFreePlanApiException;
         }
         $user = $this->user();
         $timezone = $user->timezone;
         $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
+        $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
+        $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
 
-        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $member);
+        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $member, $canAccessPremiumFeatures);
         $timeEntriesQuery->with([
             'task',
             'client',
@@ -207,8 +261,9 @@ class TimeEntryController extends Controller
             if ($viewFile === false) {
                 throw new \LogicException('View file not found');
             }
+            $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $member);
             $aggregatedData = $timeEntryAggregationService->getAggregatedTimeEntries(
-                $timeEntriesQuery->clone()->reorder()->withOnly([]),
+                $timeEntriesAggregateQuery,
                 null,
                 null,
                 $user->timezone,
@@ -216,7 +271,9 @@ class TimeEntryController extends Controller
                 false,
                 null,
                 null,
-                $showBillableRate
+                $showBillableRate,
+                $roundingType,
+                $roundingMinutes,
             );
             $html = Blade::render($viewFile, [
                 'timeEntries' => $timeEntriesQuery->get(),
@@ -226,6 +283,7 @@ class TimeEntryController extends Controller
                 'start' => $request->getStart()->timezone($timezone),
                 'end' => $request->getEnd()->timezone($timezone),
                 'localization' => $localizationService,
+                'showBillableRate' => $showBillableRate,
             ]);
             $footerViewFile = file_get_contents(resource_path('views/reports/time-entry-index/pdf-footer.blade.php'));
             if ($footerViewFile === false) {
@@ -317,12 +375,15 @@ class TimeEntryController extends Controller
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
         }
+        $canAccessPremiumFeatures = $this->canAccessPremiumFeatures($organization);
         $user = $this->user();
         $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
 
         $group1Type = $request->getGroup();
         $group2Type = $request->getSubGroup();
         $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $member);
+        $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
+        $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
 
         $aggregatedData = $timeEntryAggregationService->getAggregatedTimeEntries(
             $timeEntriesAggregateQuery,
@@ -333,7 +394,9 @@ class TimeEntryController extends Controller
             $request->getFillGapsInTimeGroups(),
             $request->getStart(),
             $request->getEnd(),
-            $showBillableRate
+            $showBillableRate,
+            $roundingType,
+            $roundingMinutes
         );
 
         return [
@@ -361,6 +424,7 @@ class TimeEntryController extends Controller
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
         }
+        $canAccessPremiumFeatures = $this->canAccessPremiumFeatures($organization);
         $format = $request->getFormatValue();
         if ($format === ExportFormat::PDF && ! $this->canAccessPremiumFeatures($organization)) {
             throw new FeatureIsNotAvailableInFreePlanApiException;
@@ -372,6 +436,8 @@ class TimeEntryController extends Controller
         $group = $request->getGroup();
         $subGroup = $request->getSubGroup();
         $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $member);
+        $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
+        $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
 
         $aggregatedData = $timeEntryAggregationService->getAggregatedTimeEntriesWithDescriptions(
             $timeEntriesAggregateQuery->clone(),
@@ -382,7 +448,9 @@ class TimeEntryController extends Controller
             false,
             $request->getStart(),
             $request->getEnd(),
-            $showBillableRate
+            $showBillableRate,
+            $roundingType,
+            $roundingMinutes
         );
         $dataHistoryChart = $timeEntryAggregationService->getAggregatedTimeEntries(
             $timeEntriesAggregateQuery->clone(),
@@ -393,7 +461,9 @@ class TimeEntryController extends Controller
             true,
             $request->getStart(),
             $request->getEnd(),
-            $showBillableRate
+            $showBillableRate,
+            $roundingType,
+            $roundingMinutes
         );
         $currency = $organization->currency;
         $timezone = app(TimezoneService::class)->getTimezoneFromUser($this->user());
@@ -428,6 +498,7 @@ class TimeEntryController extends Controller
                 'end' => $request->getEnd()->timezone($timezone),
                 'debug' => $debug,
                 'localization' => $localizationService,
+                'showBillableRate' => $showBillableRate,
             ]);
             $footerViewFile = file_get_contents(resource_path('views/reports/time-entry-aggregate/pdf-footer.blade.php'));
             if ($footerViewFile === false) {
@@ -456,7 +527,7 @@ class TimeEntryController extends Controller
                 ->putFileAs($folderPath, new File($tempFolder->path($filenameTemp)), $filename);
         } else {
             Excel::store(
-                new TimeEntriesReportExport($aggregatedData, $format, $currency, $group, $subGroup),
+                new TimeEntriesReportExport($aggregatedData, $format, $currency, $group, $subGroup, $showBillableRate),
                 $path,
                 config('filesystems.private'),
                 $format->getExportPackageType(),
@@ -475,7 +546,7 @@ class TimeEntryController extends Controller
     /**
      * @return Builder<TimeEntry>
      */
-    private function getTimeEntriesAggregateQuery(Organization $organization, TimeEntryAggregateRequest|TimeEntryAggregateExportRequest $request, ?Member $member): Builder
+    private function getTimeEntriesAggregateQuery(Organization $organization, TimeEntryAggregateRequest|TimeEntryAggregateExportRequest|TimeEntryIndexExportRequest $request, ?Member $member): Builder
     {
         $timeEntriesQuery = TimeEntry::query()
             ->whereBelongsTo($organization, 'organization');
@@ -517,16 +588,14 @@ class TimeEntryController extends Controller
             throw new TimeEntryStillRunningApiException;
         }
 
+        // Overlap check for create
+        $start = Carbon::parse($request->input('start'));
+        $end = $request->input('end') !== null ? Carbon::parse($request->input('end')) : null;
+        $this->assertNoOverlap($organization, $member, $start, $end);
+
         $project = $request->input('project_id') !== null ? Project::findOrFail((string) $request->input('project_id')) : null;
         $client = $project?->client;
         $task = $request->input('task_id') !== null ? $project->tasks()->findOrFail((string) $request->input('task_id')) : null;
-
-        if ($project !== null) {
-            RecalculateSpentTimeForProject::dispatch($project);
-        }
-        if ($task !== null) {
-            RecalculateSpentTimeForTask::dispatch($task);
-        }
 
         $timeEntry = new TimeEntry;
         $timeEntry->fill($request->validated());
@@ -536,6 +605,13 @@ class TimeEntryController extends Controller
         $timeEntry->organization()->associate($organization);
         $timeEntry->setComputedAttributeValue('billable_rate');
         $timeEntry->save();
+
+        if ($project !== null) {
+            RecalculateSpentTimeForProject::dispatch($project);
+        }
+        if ($task !== null) {
+            RecalculateSpentTimeForTask::dispatch($task);
+        }
 
         return new TimeEntryResource($timeEntry);
     }
@@ -560,6 +636,13 @@ class TimeEntryController extends Controller
         if ($timeEntry->end !== null && $request->has('end') && $request->input('end') === null) {
             throw new TimeEntryCanNotBeRestartedApiException;
         }
+
+        // Overlap check for update (exclude current)
+        /** @var Member $effectiveMember */
+        $effectiveMember = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : $timeEntry->member;
+        $effectiveStart = $request->has('start') ? Carbon::parse($request->input('start')) : $timeEntry->start;
+        $effectiveEnd = $request->has('end') ? ($request->input('end') !== null ? Carbon::parse($request->input('end')) : null) : $timeEntry->end;
+        $this->assertNoOverlap($organization, $effectiveMember, $effectiveStart, $effectiveEnd, $timeEntry);
 
         $oldProject = $timeEntry->project;
         $oldTask = $timeEntry->task;

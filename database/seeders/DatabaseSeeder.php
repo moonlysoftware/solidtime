@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Database\Seeders;
 
 use App\Enums\Role;
+use App\Events\DatabaseSeederAfterSeed;
+use App\Events\DatabaseSeederBeforeDelete;
 use App\Models\Audit;
 use App\Models\Client;
 use App\Models\Member;
@@ -22,7 +24,6 @@ use Illuminate\Support\Facades\DB;
 use Laravel\Passport\AuthCode;
 use Laravel\Passport\Client as PassportClient;
 use Laravel\Passport\ClientRepository;
-use Laravel\Passport\PersonalAccessClient;
 use Laravel\Passport\RefreshToken;
 use Laravel\Passport\Token;
 
@@ -35,6 +36,18 @@ class DatabaseSeeder extends Seeder
     {
         $this->deleteAll();
 
+        app(ClientRepository::class)->createAuthorizationCodeGrantClient(
+            name: 'Desktop App',
+            redirectUris: ['solidtime://oauth/callback'],
+            confidential: false, // TODO: ?
+            enableDeviceFlow: false, // TODO: ?
+        );
+
+        // TODO: grant_types ? migration?
+
+        // app(ClientRepository::class)->createPersonalAccessGrantClient('API');
+
+        /*
         app(ClientRepository::class)->create(
             null,
             'desktop',
@@ -44,17 +57,16 @@ class DatabaseSeeder extends Seeder
             false,
             false
         );
+        */
 
         $personalAccessClient = new PassportClient;
         $personalAccessClient->id = config('passport.personal_access_client.id');
         $personalAccessClient->secret = config('passport.personal_access_client.secret');
         $personalAccessClient->name = 'API';
-        $personalAccessClient->redirect = 'http://localhost';
-        $personalAccessClient->user_id = null;
+        $personalAccessClient->redirect_uris = ['http://localhost'];
         $personalAccessClient->revoked = false;
-        $personalAccessClient->provider = null;
-        $personalAccessClient->personal_access_client = true;
-        $personalAccessClient->password_client = false;
+        $personalAccessClient->provider = 'users';
+        $personalAccessClient->grant_types = ['personal_access'];
         $personalAccessClient->save();
 
         $userWithMultipleOrganizations = User::factory()->withPersonalOrganization()->create([
@@ -184,15 +196,17 @@ class DatabaseSeeder extends Seeder
             'email' => 'admin@example.com',
         ]);
 
+        DatabaseSeederAfterSeed::dispatch();
     }
 
     private function deleteAll(): void
     {
+        DatabaseSeederBeforeDelete::dispatch();
+
         // Laravel Passport tables
         DB::table((new RefreshToken)->getTable())->delete();
         DB::table((new Token)->getTable())->delete();
         DB::table((new AuthCode)->getTable())->delete();
-        DB::table((new PersonalAccessClient)->getTable())->delete();
         DB::table((new PassportClient)->getTable())->delete();
 
         // Internal tables
@@ -213,6 +227,9 @@ class DatabaseSeeder extends Seeder
         DB::table((new Client)->getTable())->delete();
         DB::table((new Member)->getTable())->delete();
         DB::table((new OrganizationInvitation)->getTable())->delete();
+        DB::table((new User)->getTable())->update([
+            'current_team_id' => null,
+        ]);
         DB::table((new Organization)->getTable())->delete();
         DB::table((new User)->getTable())->delete();
     }

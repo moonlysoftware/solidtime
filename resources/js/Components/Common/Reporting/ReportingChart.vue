@@ -2,11 +2,7 @@
 import VChart, { THEME_KEY } from 'vue-echarts';
 import { computed, provide, inject, shallowRef, type ComputedRef } from 'vue';
 import LinearGradient from 'zrender/lib/graphic/LinearGradient';
-import {
-    formatDate,
-    formatHumanReadableDuration,
-    formatWeek,
-} from '@/packages/ui/src/utils/time';
+import { formatDate, formatHumanReadableDuration, formatWeek } from '@/packages/ui/src/utils/time';
 import { use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { BarChart } from 'echarts/charts';
@@ -17,16 +13,9 @@ import {
     TooltipComponent,
 } from 'echarts/components';
 import type { AggregatedTimeEntries, Organization } from '@/packages/api/src';
-import { useCssVar } from '@vueuse/core';
+import { useCssVariable } from '@/utils/useCssVariable';
 
-use([
-    CanvasRenderer,
-    BarChart,
-    TitleComponent,
-    GridComponent,
-    TooltipComponent,
-    LegendComponent,
-]);
+use([CanvasRenderer, BarChart, TitleComponent, GridComponent, TooltipComponent, LegendComponent]);
 
 provide(THEME_KEY, 'dark');
 
@@ -43,10 +32,14 @@ const xAxisLabels = computed(() => {
     if (props.groupedType === 'week') {
         return props?.groupedData?.map((el) => formatWeek(el.key));
     }
-    return props?.groupedData?.map((el) => formatDate(el.key ?? '', organization?.value?.date_format));
+    return props?.groupedData?.map((el) =>
+        formatDate(el.key ?? '', organization?.value?.date_format)
+    );
 });
-const accentColor = useCssVar('--theme-color-chart', null, { observe: true });
-const labelColor = useCssVar('--color-text-secondary', null, { observe: true });
+const accentColor = useCssVariable('--theme-color-chart');
+const labelColor = useCssVariable('--color-text-secondary');
+const markLineColor = useCssVariable('--color-border-secondary');
+const splitLineColor = useCssVariable('--color-border-tertiary');
 
 const seriesData = computed(() => {
     return props?.groupedData?.map((el) => {
@@ -109,7 +102,7 @@ const option = computed(() => ({
         data: xAxisLabels.value,
         markLine: {
             lineStyle: {
-                color: 'rgba(125,156,188,0.1)',
+                color: markLineColor.value,
                 type: 'dashed',
             },
         },
@@ -120,10 +113,10 @@ const option = computed(() => ({
         },
         axisLabel: {
             fontSize: 12,
-            fontWeight: 600,
+            fontWeight: 400,
             color: labelColor.value,
             margin: 16,
-            fontFamily: 'Outfit, sans-serif',
+            fontFamily: 'Inter, sans-serif',
         },
         axisTick: {
             lineStyle: {
@@ -133,9 +126,13 @@ const option = computed(() => ({
     },
     yAxis: {
         type: 'value',
+        axisLabel: {
+            color: labelColor.value,
+            fontFamily: 'Inter, sans-serif',
+        },
         splitLine: {
             lineStyle: {
-                color: 'rgba(125,156,188,0.2)', // Set desired color here
+                color: splitLineColor.value,
             },
         },
     },
@@ -166,9 +163,7 @@ const option = computed(() => ({
             class="chart"
             :option="option" />
         <div v-else class="chart flex flex-col items-center justify-center">
-            <p class="text-lg text-text-primary font-semibold">
-                No time entries found
-            </p>
+            <p class="text-lg text-text-primary font-semibold">No time entries found</p>
             <p>Try to change the filters and time range</p>
         </div>
     </div>

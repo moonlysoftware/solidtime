@@ -15,12 +15,10 @@ use App\Service\MemberService;
 use App\Service\UserService;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\CoversClass;
-use PHPUnit\Framework\Attributes\UsesClass;
 use Tests\TestCaseWithDatabase;
 
 #[CoversClass(MemberService::class)]
 #[CoversClass(UserService::class)]
-#[UsesClass(MemberService::class)]
 class MemberServiceTest extends TestCaseWithDatabase
 {
     private MemberService $memberService;
@@ -112,6 +110,41 @@ class MemberServiceTest extends TestCaseWithDatabase
         $this->assertSame($otherUser->getKey(), $otherTimeEntry->user_id);
         $this->assertSame($otherMember->getKey(), $otherTimeEntry->member_id);
         $this->assertSame(1, $otherUser->organizations()->count());
+    }
+
+    public function test_make_member_to_placeholder_resets_current_organization_of_user_if_user_is_no_longer_member_to_newly_created_organization(): void
+    {
+        // Arrange
+        $organization = Organization::factory()->create();
+        $user = User::factory()->forCurrentOrganization($organization)->create();
+        $member = Member::factory()->forOrganization($organization)->forUser($user)->role(Role::Employee)->create();
+
+        // Act
+        $this->memberService->makeMemberToPlaceholder($member);
+
+        // Assert
+        $user->refresh();
+        $this->assertNotNull($user->current_team_id);
+        $this->assertNotSame($organization->id, $user->current_team_id);
+    }
+
+    public function test_make_member_to_placeholder_resets_current_organization_of_user_if_user_is_no_longer_member_to_already_existing_other_organization(): void
+    {
+        // Arrange
+        $organization = Organization::factory()->create();
+        $user = User::factory()->forCurrentOrganization($organization)->create();
+        $member = Member::factory()->forOrganization($organization)->forUser($user)->role(Role::Employee)->create();
+
+        $otherOrganization = Organization::factory()->create();
+        $otherMember = Member::factory()->forOrganization($otherOrganization)->forUser($user)->role(Role::Employee)->create();
+
+        // Act
+        $this->memberService->makeMemberToPlaceholder($member);
+
+        // Assert
+        $user->refresh();
+        $this->assertNotNull($user->current_team_id);
+        $this->assertSame($otherOrganization->id, $user->current_team_id);
     }
 
     public function test_assign_organization_entities_to_different_member_without_any_entries(): void

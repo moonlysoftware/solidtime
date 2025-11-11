@@ -76,7 +76,7 @@ export const useCurrentTimeEntryStore = defineStore('currentTimeEntry', () => {
                         currentTimeEntry.value = { ...emptyTimeEntry };
                     }
                 }
-            } catch{
+            } catch {
                 currentTimeEntry.value = { ...emptyTimeEntry };
             }
         } else {
@@ -144,9 +144,7 @@ export const useCurrentTimeEntryStore = defineStore('currentTimeEntry', () => {
             );
             $reset();
         } else {
-            throw new Error(
-                'Failed to stop current timer because organization ID is missing.'
-            );
+            throw new Error('Failed to stop current timer because organization ID is missing.');
         }
     }
 
@@ -164,7 +162,7 @@ export const useCurrentTimeEntryStore = defineStore('currentTimeEntry', () => {
                             task_id: currentTimeEntry.value.task_id,
                             start: currentTimeEntry.value.start,
                             billable: currentTimeEntry.value.billable,
-                            end: null,
+                            end: currentTimeEntry.value.end,
                             tags: currentTimeEntry.value.tags,
                         },
                         {
@@ -177,7 +175,12 @@ export const useCurrentTimeEntryStore = defineStore('currentTimeEntry', () => {
                 'Time entry updated!'
             );
             if (response?.data) {
-                currentTimeEntry.value = response.data;
+                if (response.data.end === null) {
+                    currentTimeEntry.value = response.data;
+                } else {
+                    $reset();
+                    stopLiveTimer();
+                }
             }
         } else {
             throw new Error(
@@ -217,5 +220,6 @@ export const useCurrentTimeEntryStore = defineStore('currentTimeEntry', () => {
         stopLiveTimer,
         now,
         setActiveState,
+        $reset,
     };
 });

@@ -19,13 +19,22 @@ import TimeTrackerControls from '@/packages/ui/src/TimeTracker/TimeTrackerContro
 import type {
     CreateClientBody,
     CreateProjectBody,
+    CreateTimeEntryBody,
     Project,
+    Tag,
 } from '@/packages/api/src';
 import TimeTrackerRunningInDifferentOrganizationOverlay from '@/packages/ui/src/TimeTracker/TimeTrackerRunningInDifferentOrganizationOverlay.vue';
+import TimeTrackerMoreOptionsDropdown from '@/packages/ui/src/TimeTracker/TimeTrackerMoreOptionsDropdown.vue';
+import TimeEntryCreateModal from '@/packages/ui/src/TimeEntry/TimeEntryCreateModal.vue';
 import { useClientsStore } from '@/utils/useClients';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 import { canCreateProjects } from '@/utils/permissions';
+import { ref } from 'vue';
+import { useTimeEntriesStore } from '@/utils/useTimeEntries';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
+import { api } from '@/packages/api/src';
+import { useNotificationsStore } from '@/utils/notification';
 
 const page = usePage<{
     auth: {
@@ -50,6 +59,8 @@ const { clients } = storeToRefs(clientStore);
 const emit = defineEmits<{
     change: [];
 }>();
+
+const showManualTimeEntryModal = ref(false);
 
 watch(isActive, () => {
     if (isActive.value) {
@@ -81,9 +92,7 @@ const isRunningInDifferentOrganization = computed(() => {
     );
 });
 
-async function createProject(
-    project: CreateProjectBody
-): Promise<Project | undefined> {
+async function createProject(project: CreateProjectBody): Promise<Project | undefined> {
     const newProject = await useProjectsStore().createProject(project);
     if (newProject) {
         currentTimeEntry.value.project_id = newProject.id;
@@ -99,40 +108,107 @@ function switchToTimeEntryOrganization() {
         switchOrganization(currentTimeEntry.value.organization_id);
     }
 }
-async function createTag(tag: string) {
+async function createTag(tag: string): Promise<Tag | undefined> {
     return await useTagsStore().createTag(tag);
+}
+
+async function createTimeEntry(timeEntry: Omit<CreateTimeEntryBody, 'member_id'>) {
+    await useTimeEntriesStore().createTimeEntry(timeEntry);
+    showManualTimeEntryModal.value = false;
+}
+
+async function createTimeEntryFromCurrentEntry() {
+    const { start, end, description, project_id, task_id, billable, tags } = currentTimeEntry.value;
+    await createTimeEntry({ start, end, description, project_id, task_id, billable, tags });
+    currentTimeEntryStore.$reset();
+}
+
+const { handleApiRequestNotifications } = useNotificationsStore();
+const queryClient = useQueryClient();
+
+const deleteTimeEntryMutation = useMutation({
+    mutationFn: async (timeEntryId: string) => {
+        const organizationId = getCurrentOrganizationId();
+        if (!organizationId) {
+            throw new Error('No organization selected');
+        }
+        return await api.deleteTimeEntry(undefined, {
+            params: {
+                organization: organizationId,
+                timeEntry: timeEntryId,
+            },
+        });
+    },
+    onSuccess: async () => {
+        await currentTimeEntryStore.fetchCurrentTimeEntry();
+        await useTimeEntriesStore().fetchTimeEntries();
+        queryClient.invalidateQueries({ queryKey: ['timeEntry'] });
+        queryClient.invalidateQueries({ queryKey: ['timeEntries'] });
+    },
+});
+
+async function discardCurrentTimeEntry() {
+    if (currentTimeEntry.value.id) {
+        await handleApiRequestNotifications(
+            () => deleteTimeEntryMutation.mutateAsync(currentTimeEntry.value.id),
+            'Time entry discarded successfully',
+            'Failed to discard time entry'
+        );
+    }
 }
 
 const { tags } = storeToRefs(useTagsStore());
 </script>
 
 <template>
+    <TimeEntryCreateModal
+        v-model:show="showManualTimeEntryModal"
+        :enable-estimated-time="isAllowedToPerformPremiumAction()"
+        :create-project="createProject"
+        :create-client="createClient"
+        :create-tag="createTag"
+        :create-time-entry="createTimeEntry"
+        :projects
+        :tasks
+        :tags
+        :clients></TimeEntryCreateModal>
     <CardTitle title="Time Tracker" :icon="ClockIcon"></CardTitle>
     <div class="relative">
         <TimeTrackerRunningInDifferentOrganizationOverlay
-            v-if="
-                isRunningInDifferentOrganization
-            "
-            @switch-organization="switchToTimeEntryOrganization"></TimeTrackerRunningInDifferentOrganizationOverlay>
+            v-if="isRunningInDifferentOrganization"
+            @switch-organization="
+                switchToTimeEntryOrganization
+            "></TimeTrackerRunningInDifferentOrganizationOverlay>
 
-        <TimeTrackerControls
-            v-model:current-time-entry="currentTimeEntry"
-            v-model:live-timer="now"
-            :create-project
-            :enable-estimated-time="isAllowedToPerformPremiumAction()"
-            :can-create-project="canCreateProjects()"
-            :create-client
-            :clients
-            :tags
-            :tasks
-            :projects
-            :create-tag
-            :is-active
-            :currency="getOrganizationCurrencyString()"
-            @start-live-timer="startLiveTimer"
-            @stop-live-timer="stopLiveTimer"
-            @start-timer="setActiveState(true)"
-            @stop-timer="setActiveState(false)"
-            @update-time-entry="updateTimeEntry"></TimeTrackerControls>
+        <div class="flex w-full items-center gap-2">
+            <div class="flex w-full items-center gap-2">
+                <div class="flex-1">
+                    <TimeTrackerControls
+                        v-model:current-time-entry="currentTimeEntry"
+                        v-model:live-timer="now"
+                        :create-project
+                        :enable-estimated-time="isAllowedToPerformPremiumAction()"
+                        :can-create-project="canCreateProjects()"
+                        :create-client
+                        :clients
+                        :tags
+                        :tasks
+                        :projects
+                        :create-tag
+                        :is-active
+                        :currency="getOrganizationCurrencyString()"
+                        @start-live-timer="startLiveTimer"
+                        @stop-live-timer="stopLiveTimer"
+                        @start-timer="setActiveState(true)"
+                        @stop-timer="setActiveState(false)"
+                        @update-time-entry="updateTimeEntry"
+                        @create-time-entry="createTimeEntryFromCurrentEntry"></TimeTrackerControls>
+                </div>
+                <TimeTrackerMoreOptionsDropdown
+                    :has-active-timer="isActive"
+                    @manual-entry="showManualTimeEntryModal = true"
+                    @discard="discardCurrentTimeEntry"></TimeTrackerMoreOptionsDropdown>
+            </div>
+        </div>
     </div>
 </template>

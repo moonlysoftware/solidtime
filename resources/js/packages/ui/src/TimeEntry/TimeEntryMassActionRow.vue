@@ -28,9 +28,7 @@ const props = defineProps<{
     createTag: (name: string) => Promise<Tag | undefined>;
     createProject: (project: CreateProjectBody) => Promise<Project | undefined>;
     createClient: (client: CreateClientBody) => Promise<Client | undefined>;
-    updateTimeEntries: (
-        changeset: UpdateMultipleTimeEntriesChangeset
-    ) => Promise<void>;
+    updateTimeEntries: (changeset: UpdateMultipleTimeEntriesChangeset) => Promise<void>;
     currency: string;
     enableEstimatedTime: boolean;
     canCreateProject: boolean;
@@ -65,15 +63,13 @@ const showMassUpdateModal = ref(false);
         :class="
             twMerge(
                 props.class,
-                'text-sm py-1.5 font-medium border-t border-b bg-secondary border-border-secondary flex items-center space-x-3'
+                'text-sm py-1.5 font-medium bg-secondary flex items-center space-x-3'
             )
         ">
         <Checkbox
             id="selectAll"
             :checked="allSelected"
-            @update:checked="
-                allSelected ? emit('unselectAll') : emit('selectAll')
-            ">
+            @update:checked="allSelected ? emit('unselectAll') : emit('selectAll')">
         </Checkbox>
         <InputLabel
             v-if="selectedTimeEntries.length > 0"
@@ -81,10 +77,7 @@ const showMassUpdateModal = ref(false);
             class="select-none text-text-secondary">
             {{ selectedTimeEntries.length }} selected
         </InputLabel>
-        <InputLabel
-            v-else
-            for="selectAll"
-            class="text-text-secondary select-none"
+        <InputLabel v-else for="selectAll" class="text-text-secondary select-none"
             >Select All</InputLabel
         >
         <button

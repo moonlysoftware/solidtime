@@ -6,17 +6,14 @@ import type {
     AggregatedTimeEntriesQueryParams,
     ReportingResponse,
 } from '@/packages/api/src';
-import { getCurrentOrganizationId } from '@/utils/useUser';
+import { getCurrentOrganizationId, getCurrentRole, getCurrentUser } from '@/utils/useUser';
 import { useNotificationsStore } from '@/utils/notification';
 import { useProjectsStore } from '@/utils/useProjects';
 import { useMembersStore } from '@/utils/useMembers';
 import { useTasksStore } from '@/utils/useTasks';
 import { useClientsStore } from '@/utils/useClients';
-import {
-    CheckCircleIcon,
-    UserCircleIcon,
-    UserGroupIcon,
-} from '@heroicons/vue/20/solid';
+import { useTagsStore } from '@/utils/useTags';
+import { CheckCircleIcon, UserCircleIcon, UserGroupIcon } from '@heroicons/vue/20/solid';
 import { DocumentTextIcon, FolderIcon } from '@heroicons/vue/16/solid';
 import BillableIcon from '@/packages/ui/src/Icons/BillableIcon.vue';
 
@@ -26,7 +23,8 @@ export type GroupingOption =
     | 'user'
     | 'billable'
     | 'client'
-    | 'description';
+    | 'description'
+    | 'tag';
 
 export const useReportingStore = defineStore('reporting', () => {
     const reportingGraphResponse = ref<ReportingResponse | null>(null);
@@ -34,9 +32,7 @@ export const useReportingStore = defineStore('reporting', () => {
 
     const { handleApiRequestNotifications } = useNotificationsStore();
 
-    async function fetchGraphReporting(
-        params: AggregatedTimeEntriesQueryParams
-    ) {
+    async function fetchGraphReporting(params: AggregatedTimeEntriesQueryParams) {
         const organization = getCurrentOrganizationId();
         if (organization) {
             reportingGraphResponse.value = await handleApiRequestNotifications(
@@ -53,9 +49,7 @@ export const useReportingStore = defineStore('reporting', () => {
         }
     }
 
-    async function fetchTableReporting(
-        params: AggregatedTimeEntriesQueryParams
-    ) {
+    async function fetchTableReporting(params: AggregatedTimeEntriesQueryParams) {
         const organization = getCurrentOrganizationId();
         if (organization) {
             reportingTableResponse.value = await handleApiRequestNotifications(
@@ -87,12 +81,10 @@ export const useReportingStore = defineStore('reporting', () => {
         billable: 'Non-Billable',
         client: 'No Client',
         description: 'No Description',
+        tag: 'No Tag',
     } as Record<string, string>;
 
-    function getNameForReportingRowEntry(
-        key: string | null,
-        type: string | null
-    ) {
+    function getNameForReportingRowEntry(key: string | null, type: string | null) {
         if (type === null) {
             return null;
         }
@@ -106,6 +98,9 @@ export const useReportingStore = defineStore('reporting', () => {
             return projects.value.find((project) => project.id === key)?.name;
         }
         if (type === 'user') {
+            if (getCurrentRole() === 'employee') {
+                return getCurrentUser().name;
+            }
             const memberStore = useMembersStore();
             const { members } = storeToRefs(memberStore);
             return members.value.find((member) => member.user_id === key)?.name;
@@ -119,6 +114,11 @@ export const useReportingStore = defineStore('reporting', () => {
             const clientsStore = useClientsStore();
             const { clients } = storeToRefs(clientsStore);
             return clients.value.find((client) => client.id === key)?.name;
+        }
+        if (type === 'tag') {
+            const tagsStore = useTagsStore();
+            const { tags } = storeToRefs(tagsStore);
+            return tags.value.find((tag) => tag.id === key)?.name;
         }
         if (type === 'billable') {
             if (key === '0') {
@@ -163,6 +163,11 @@ export const useReportingStore = defineStore('reporting', () => {
         {
             label: 'Description',
             value: 'description',
+            icon: DocumentTextIcon,
+        },
+        {
+            label: 'Tags',
+            value: 'tag',
             icon: DocumentTextIcon,
         },
     ];

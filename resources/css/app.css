@@ -43,14 +43,19 @@
 
     --theme-color-input-select-active: rgb(var(--color-accent-300));
     --theme-color-input-select-active-hover: rgb(var(--color-accent-200));
+
+    --color-accent-default: rgba(var(--color-accent-300), 0.2);
+    --color-accent-foreground: rgb(var(--color-accent-100));
+    --theme-color-default-background: var(--color-bg-primary);
+
 }
 
 :root.light {
-    --color-bg-primary: #F5F5F5;
+    --color-bg-primary: #FFFFFF;
     --color-bg-secondary: #f7f7f8;
-    --color-bg-tertiary: #e1e1e3;
-    --color-bg-quaternary: #ffffff;
-    --color-bg-background: #ffffff;
+    --color-bg-tertiary: #eeeeef;
+    --color-bg-quaternary: #e1e1e3;
+    --color-bg-background: #F5F5F5;
     --color-text-primary: #18181b;
     --color-text-secondary: #3f3f46;
     --color-text-tertiary: #57575C;
@@ -60,14 +65,14 @@
     --color-border-tertiary: #dfdfdf;
     --color-border-quaternary: #d1d1d1;
     --color-input-border-active: rgba(0,0,0,0.3);
-    --theme-color-menu-active: var(--color-bg-tertiary);
+    --theme-color-menu-active: var(--color-bg-quaternary);
 
-    --theme-color-card-background: var(--color-bg-quaternary);
-    --theme-color-card-background-active: var(--color-bg-primary);
+    --theme-color-card-background: var(--color-bg-primary);
+    --theme-color-card-background-active: var(--color-bg-tertiary);
 
     --theme-color-chart: var(--color-accent-400);
 
-    --theme-shadow-card: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --theme-shadow-card: lch(0 0 0 / 0.022) 0px 3px 6px -2px, lch(0 0 0 / 0.044) 0px 1px 1px;
     --theme-shadow-dropdown: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
 
     --theme-color-row-background: var(--theme-color-card-background);
@@ -82,14 +87,18 @@
     --theme-color-button-primary-border: rgba(var(--color-accent-600), 1);
     --theme-color-button-primary-text: #FFFFFF;
 
-    --theme-color-input-background: var(--color-bg-quaternary);
+    --theme-color-input-background: var(--color-bg-primary);
 
     --theme-color-input-select-active: rgb(var(--color-accent-400));
     --theme-color-input-select-active-hover: rgb(var(--color-accent-500));
+
+    --color-accent-default: rgb(var(--color-accent-100));
+    --color-accent-foreground: rgb(var(--color-accent-800));
+    --theme-color-default-background: #FCFCFC;
+
 }
 
 :root {
-    --theme-color-default-background: var(--color-bg-primary);
     --theme-color-icon-active: rgb(var(--color-text-tertiary));
     --theme-color-card-background-separator: var(--color-border-tertiary);
     --theme-color-card-border: var(--color-border-secondary);
@@ -154,30 +163,15 @@ body {
 }
 
 
+/* Inter Variable Font with browser compatibility considerations */
 @font-face {
-    font-family: 'Outfit';
-    src: url('/fonts/Outfit-Regular.ttf');
-    font-weight: 400;
-}
-@font-face {
-    font-family: 'Outfit';
-    src: url('/fonts/Outfit-Medium.ttf');
-    font-weight: 500;
-}
-@font-face {
-    font-family: 'Outfit';
-    src: url('/fonts/Outfit-SemiBold.ttf');
-    font-weight: 600;
-}
-@font-face {
-    font-family: 'Outfit';
-    src: url('/fonts/Outfit-Bold.ttf');
-    font-weight: 700;
-}
-@font-face {
-    font-family: 'Outfit';
-    src: url('/fonts/Outfit-ExtraBold.ttf');
-    font-weight: 800;
+    font-family: 'Inter';
+    src: url('/fonts/InterVariable.woff2') format('woff2'),
+         url('/fonts/InterVariable.ttf') format('truetype');
+    font-weight: 100 900;
+    font-style: normal;
+    font-display: swap;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
 }
 
 @layer base {
@@ -199,7 +193,7 @@ body {
         --destructive: 0 84.2% 60.2%;
         --destructive-foreground: var(--color-text-primary);
         --border: var(--color-border-primary);
-        --input: var(--theme-color-input-background);
+        --input: var(--color-border-tertiary);
         --ring: var(--theme-color-ring);
         --chart-1: var(--color-accent-400);
         --chart-2: var(--color-accent-500);
@@ -226,7 +220,7 @@ body {
         --destructive: 0 62.8% 30.6%;
         --destructive-foreground: var(--color-text-primary);
         --border: var(--color-border-primary);
-        --input: var(--theme-color-input-background);
+        --input: var(--color-border-tertiary);
         --ring: var(--theme-color-ring);
         --chart-1: var(--color-accent-200);
         --chart-2: var(--color-accent-300);

@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Http\Requests\V1\TimeEntry;
 
 use App\Enums\TimeEntryAggregationType;
+use App\Enums\TimeEntryRoundingType;
+use App\Http\Requests\V1\BaseFormRequest;
 use App\Models\Client;
 use App\Models\Member;
 use App\Models\Organization;
@@ -14,7 +16,6 @@ use App\Models\Task;
 use App\Models\User;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\Rule;
 use Korridor\LaravelModelValidationRules\Rules\ExistsEloquent;
@@ -22,7 +23,7 @@ use Korridor\LaravelModelValidationRules\Rules\ExistsEloquent;
 /**
  * @property Organization $organization
  */
-class TimeEntryAggregateRequest extends FormRequest
+class TimeEntryAggregateRequest extends BaseFormRequest
 {
     /**
      * Get the validation rules that apply to the request.
@@ -146,6 +147,18 @@ class TimeEntryAggregateRequest extends FormRequest
                 'string',
                 'in:true,false',
             ],
+            // Rounding type defined where the end of each time entry should be rounded to. For example: nearest rounds the end to the nearest x minutes group. Rounding per time entry is activated if `rounding_type` and `rounding_minutes` is not null.
+            'rounding_type' => [
+                'nullable',
+                'string',
+                Rule::enum(TimeEntryRoundingType::class),
+            ],
+            // Defines the length of the interval that the time entry rounding rounds to.
+            'rounding_minutes' => [
+                'nullable',
+                'numeric',
+                'integer',
+            ],
         ];
     }
 
@@ -172,5 +185,23 @@ class TimeEntryAggregateRequest extends FormRequest
     public function getEnd(): ?Carbon
     {
         return $this->input('end') !== null ? Carbon::createFromFormat('Y-m-d\TH:i:s\Z', $this->input('end'), 'UTC') : null;
+    }
+
+    public function getRoundingType(): ?TimeEntryRoundingType
+    {
+        if (! $this->has('rounding_type') || $this->validated('rounding_type') === null) {
+            return null;
+        }
+
+        return TimeEntryRoundingType::from($this->validated('rounding_type'));
+    }
+
+    public function getRoundingMinutes(): ?int
+    {
+        if (! $this->has('rounding_minutes') || $this->validated('rounding_minutes') === null) {
+            return null;
+        }
+
+        return (int) $this->validated('rounding_minutes');
     }
 }

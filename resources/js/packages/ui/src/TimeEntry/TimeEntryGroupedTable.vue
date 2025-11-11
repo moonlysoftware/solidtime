@@ -10,10 +10,7 @@ import type {
     TimeEntry,
     Client,
 } from '@/packages/api/src';
-import {
-    getDayJsInstance,
-    getLocalizedDateFromTimestamp,
-} from '@/packages/ui/src/utils/time';
+import { getDayJsInstance, getLocalizedDateFromTimestamp } from '@/packages/ui/src/utils/time';
 import TimeEntryAggregateRow from '@/packages/ui/src/TimeEntry/TimeEntryAggregateRow.vue';
 import TimeEntryRowHeading from '@/packages/ui/src/TimeEntry/TimeEntryRowHeading.vue';
 import TimeEntryRow from '@/packages/ui/src/TimeEntry/TimeEntryRow.vue';
@@ -48,17 +45,13 @@ const groupedTimeEntries = computed(() => {
         if (entry.end === null) {
             continue;
         }
-        const oldEntries =
-            groupedEntriesByDay[getLocalizedDateFromTimestamp(entry.start)];
+        const oldEntries = groupedEntriesByDay[getLocalizedDateFromTimestamp(entry.start)];
         groupedEntriesByDay[getLocalizedDateFromTimestamp(entry.start)] = [
             ...(oldEntries ?? []),
             entry,
         ];
     }
-    const groupedEntriesByDayAndType: Record<
-        string,
-        TimeEntriesGroupedByType[]
-    > = {};
+    const groupedEntriesByDayAndType: Record<string, TimeEntriesGroupedByType[]> = {};
     for (const dailyEntriesKey in groupedEntriesByDay) {
         const dailyEntries = groupedEntriesByDay[dailyEntriesKey];
         const newDailyEntries: TimeEntriesGroupedByType[] = [];
@@ -77,15 +70,12 @@ const groupedTimeEntries = computed(() => {
 
                 // Add up durations for time entries of the same type
                 newDailyEntries[oldEntriesIndex].duration =
-                    (newDailyEntries[oldEntriesIndex].duration ?? 0) +
-                    (entry?.duration ?? 0);
+                    (newDailyEntries[oldEntriesIndex].duration ?? 0) + (entry?.duration ?? 0);
 
                 // adapt start end times so they show the earliest start and latest end time
                 if (
                     getDayJsInstance()(entry.start).isBefore(
-                        getDayJsInstance()(
-                            newDailyEntries[oldEntriesIndex].start
-                        )
+                        getDayJsInstance()(newDailyEntries[oldEntriesIndex].start)
                     )
                 ) {
                     newDailyEntries[oldEntriesIndex].start = entry.start;
@@ -118,6 +108,7 @@ function startTimeEntryFromExisting(entry: TimeEntry) {
         tags: [...entry.tags],
     });
 }
+
 function sumDuration(timeEntries: TimeEntry[]) {
     return timeEntries.reduce((acc, entry) => acc + (entry?.duration ?? 0), 0);
 }
@@ -133,17 +124,15 @@ function selectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
     }
 }
 function unselectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
-    selectedTimeEntries.value = selectedTimeEntries.value.filter(
-        (timeEntry) => {
-            return !value.find(
-                (filterTimeEntry) =>
-                    filterTimeEntry.id === timeEntry.id ||
-                    filterTimeEntry.timeEntries?.find(
-                        (subTimeEntry) => subTimeEntry.id === timeEntry.id
-                    )
-            );
-        }
-    );
+    selectedTimeEntries.value = selectedTimeEntries.value.filter((timeEntry) => {
+        return !value.find(
+            (filterTimeEntry) =>
+                filterTimeEntry.id === timeEntry.id ||
+                filterTimeEntry.timeEntries?.find(
+                    (subTimeEntry) => subTimeEntry.id === timeEntry.id
+                )
+        );
+    });
 }
 </script>
 
@@ -153,9 +142,7 @@ function unselectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
             :date="key"
             :duration="sumDuration(value)"
             :checked="
-                value.every((timeEntry: TimeEntry) =>
-                    selectedTimeEntries.includes(timeEntry)
-                )
+                value.every((timeEntry: TimeEntry) => selectedTimeEntries.includes(timeEntry))
             "
             @select-all="selectAllTimeEntries(value)"
             @unselect-all="unselectAllTimeEntries(value)"></TimeEntryRowHeading>
@@ -172,6 +159,7 @@ function unselectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
                 :tags="tags"
                 :clients
                 :on-start-stop-click="startTimeEntryFromExisting"
+                :duplicate-time-entry="createTimeEntry"
                 :update-time-entries
                 :update-time-entry
                 :delete-time-entries
@@ -180,10 +168,7 @@ function unselectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
                 :time-entry="entry"
                 @selected="
                     (timeEntries: TimeEntry[]) => {
-                        selectedTimeEntries = [
-                            ...selectedTimeEntries,
-                            ...timeEntries,
-                        ];
+                        selectedTimeEntries = [...selectedTimeEntries, ...timeEntries];
                     }
                 "
                 @unselected="
@@ -191,8 +176,7 @@ function unselectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
                         selectedTimeEntries = selectedTimeEntries.filter(
                             (item: TimeEntry) =>
                                 !timeEntriesToUnselect.find(
-                                    (filterEntry: TimeEntry) =>
-                                        filterEntry.id === item.id
+                                    (filterEntry: TimeEntry) => filterEntry.id === item.id
                                 )
                         );
                     }
@@ -216,6 +200,7 @@ function unselectAllTimeEntries(value: TimeEntriesGroupedByType[]) {
                 :update-time-entry
                 :on-start-stop-click="() => startTimeEntryFromExisting(entry)"
                 :delete-time-entry="() => deleteTimeEntries([entry])"
+                :duplicate-time-entry="() => createTimeEntry(entry)"
                 :currency="currency"
                 :time-entry="entry.timeEntries[0]"
                 @selected="selectedTimeEntries.push(entry)"

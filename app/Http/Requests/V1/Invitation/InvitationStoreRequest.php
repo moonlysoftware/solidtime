@@ -5,18 +5,15 @@ declare(strict_types=1);
 namespace App\Http\Requests\V1\Invitation;
 
 use App\Enums\Role;
+use App\Http\Requests\V1\BaseFormRequest;
 use App\Models\Organization;
-use App\Models\OrganizationInvitation;
 use Illuminate\Contracts\Validation\ValidationRule;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use Korridor\LaravelModelValidationRules\Rules\UniqueEloquent;
 
 /**
  * @property Organization $organization
  */
-class InvitationStoreRequest extends FormRequest
+class InvitationStoreRequest extends BaseFormRequest
 {
     /**
      * Get the validation rules that apply to the request.
@@ -29,10 +26,6 @@ class InvitationStoreRequest extends FormRequest
             'email' => [
                 'required',
                 'email',
-                UniqueEloquent::make(OrganizationInvitation::class, 'email', function (Builder $builder): Builder {
-                    /** @var Builder<OrganizationInvitation> $builder */
-                    return $builder->whereBelongsTo($this->organization, 'organization');
-                })->withCustomTranslation('validation.invitation_already_exists'),
             ],
             'role' => [
                 'required',

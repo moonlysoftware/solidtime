@@ -15,8 +15,6 @@ import type {
 } from '@/packages/api/src';
 import { useElementVisibility } from '@vueuse/core';
 import { ClockIcon } from '@heroicons/vue/20/solid';
-import SecondaryButton from '@/packages/ui/src/Buttons/SecondaryButton.vue';
-import { PlusIcon } from '@heroicons/vue/16/solid';
 import LoadingSpinner from '@/packages/ui/src/LoadingSpinner.vue';
 import { useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
 import { useTasksStore } from '@/utils/useTasks';
@@ -24,7 +22,6 @@ import { useProjectsStore } from '@/utils/useProjects';
 import TimeEntryGroupedTable from '@/packages/ui/src/TimeEntry/TimeEntryGroupedTable.vue';
 import { useTagsStore } from '@/utils/useTags';
 import { useClientsStore } from '@/utils/useClients';
-import TimeEntryCreateModal from '@/packages/ui/src/TimeEntry/TimeEntryCreateModal.vue';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import TimeEntryMassActionRow from '@/packages/ui/src/TimeEntry/TimeEntryMassActionRow.vue';
 import type { UpdateMultipleTimeEntriesChangeset } from '@/packages/api/src';
@@ -33,13 +30,9 @@ import { canCreateProjects } from '@/utils/permissions';
 
 const timeEntriesStore = useTimeEntriesStore();
 const { timeEntries, allTimeEntriesLoaded } = storeToRefs(timeEntriesStore);
-const { updateTimeEntry, fetchTimeEntries, createTimeEntry } =
-    useTimeEntriesStore();
+const { updateTimeEntry, fetchTimeEntries, createTimeEntry } = useTimeEntriesStore();
 
-async function updateTimeEntries(
-    ids: string[],
-    changes: UpdateMultipleTimeEntriesChangeset
-) {
+async function updateTimeEntries(ids: string[], changes: UpdateMultipleTimeEntriesChangeset) {
     await useTimeEntriesStore().updateTimeEntries(ids, changes);
     fetchTimeEntries();
 }
@@ -52,9 +45,7 @@ const { currentTimeEntry } = storeToRefs(currentTimeEntryStore);
 const { setActiveState } = currentTimeEntryStore;
 const { tags } = storeToRefs(useTagsStore());
 
-async function startTimeEntry(
-    timeEntry: Omit<CreateTimeEntryBody, 'member_id'>
-) {
+async function startTimeEntry(timeEntry: Omit<CreateTimeEntryBody, 'member_id'>) {
     if (currentTimeEntry.value.id) {
         await setActiveState(false);
     }
@@ -69,11 +60,7 @@ function deleteTimeEntries(timeEntries: TimeEntry[]) {
 }
 
 watch(isLoadMoreVisible, async (isVisible) => {
-    if (
-        isVisible &&
-        timeEntries.value.length > 0 &&
-        !allTimeEntriesLoaded.value
-    ) {
+    if (isVisible && timeEntries.value.length > 0 && !allTimeEntriesLoaded.value) {
         loading.value = true;
         await timeEntriesStore.fetchMoreTimeEntries();
     }
@@ -83,7 +70,6 @@ onMounted(async () => {
     await timeEntriesStore.fetchTimeEntries();
 });
 
-const showManualTimeEntryModal = ref(false);
 const projectStore = useProjectsStore();
 const { projects } = storeToRefs(projectStore);
 const taskStore = useTasksStore();
@@ -94,14 +80,10 @@ const { clients } = storeToRefs(clientStore);
 async function createTag(name: string) {
     return await useTagsStore().createTag(name);
 }
-async function createProject(
-    project: CreateProjectBody
-): Promise<Project | undefined> {
+async function createProject(project: CreateProjectBody): Promise<Project | undefined> {
     return await useProjectsStore().createProject(project);
 }
-async function createClient(
-    body: CreateClientBody
-): Promise<Client | undefined> {
+async function createClient(body: CreateClientBody): Promise<Client | undefined> {
     return await useClientsStore().createClient(body);
 }
 
@@ -119,34 +101,9 @@ function deleteSelected() {
 </script>
 
 <template>
-    <TimeEntryCreateModal
-        v-model:show="showManualTimeEntryModal"
-        :enable-estimated-time="isAllowedToPerformPremiumAction()"
-        :create-project="createProject"
-        :create-client="createClient"
-        :create-tag="createTag"
-        :create-time-entry="createTimeEntry"
-        :projects
-        :tasks
-        :tags
-        :clients></TimeEntryCreateModal>
     <AppLayout title="Dashboard" data-testid="time_view">
-        <MainContainer
-            class="pt-5 lg:pt-8 pb-4 lg:pb-6">
-            <div
-                class="lg:flex items-end lg:divide-x divide-default-background-separator divide-y lg:divide-y-0 space-y-2 lg:space-y-0 lg:space-x-2">
-                <div class="flex-1">
-                    <TimeTracker></TimeTracker>
-                </div>
-                <div class="pb-2 pt-2 lg:pt-0 lg:pl-4 flex justify-center">
-                    <SecondaryButton
-                        class="w-full text-center flex justify-center"
-                        :icon="PlusIcon"
-                        @click="showManualTimeEntryModal = true"
-                        >Manual time entry
-                    </SecondaryButton>
-                </div>
-            </div>
+        <MainContainer class="pt-5 lg:pt-8 pb-4 lg:pb-6">
+            <TimeTracker></TimeTracker>
         </MainContainer>
         <TimeEntryMassActionRow
             :selected-time-entries="selectedTimeEntries"
@@ -159,6 +116,7 @@ function deleteSelected() {
             :tags="tags"
             :currency="getOrganizationCurrencyString()"
             :clients="clients"
+            class="border-t border-default-background-separator"
             :update-time-entries="
                 (args) =>
                     updateTimeEntries(

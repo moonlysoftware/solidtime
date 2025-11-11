@@ -1,13 +1,18 @@
 name: PHPUnit Tests
 on: push
+permissions:
+  contents: read
 jobs:
   phpunit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      matrix:
+        postgres_version: [ 15, 16, 17 ]
 
     services:
       pgsql_test:
-        image: postgres:15
+        image: postgres:${{ matrix.postgres_version }}
         env:
           PGPASSWORD: 'root'
           POSTGRES_DB: 'laravel'
@@ -63,7 +68,7 @@ jobs:
         run: php artisan test --stop-on-failure --coverage-text --coverage-clover=coverage.xml
 
       - name: "Upload coverage reports to Codecov"
-        uses: codecov/codecov-action@v5.4.2
+        uses: codecov/codecov-action@v5.4.3
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: solidtime-io/solidtime
