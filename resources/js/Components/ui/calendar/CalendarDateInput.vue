@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Popover, PopoverContent, PopoverTrigger } from '@/Components/ui/popover';
-import { Button } from '@/Components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/packages/ui/src';
+import { Button } from '@/packages/ui/src';
 import { Calendar } from '@/Components/ui/calendar';
 import { CalendarIcon, XIcon } from 'lucide-vue-next';
 import { formatDate } from '@/packages/ui/src/utils/time';
@@ -42,7 +42,6 @@ const organization = inject<ComputedRef<Organization>>('organization');
         <PopoverTrigger as-child>
             <Button
                 variant="input"
-                size="input"
                 :class="[
                     'w-full justify-start text-left font-normal',
                     !model && 'text-muted-foreground',

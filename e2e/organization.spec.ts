@@ -223,9 +223,211 @@ test('test that format settings are reflected in the dashboard', async ({ page }
 
     // check that the current date is displayed in the dd/mm/yyyy format on the time page
     await page.goto(PLAYWRIGHT_BASE_URL + '/time');
+    // Wait for time entries to load so organization data is available for date formatting
+    await page.waitForResponse(
+        (response) => response.url().includes('/time-entries') && response.status() === 200
+    );
     await expect(
         page.getByText(new Date().toLocaleDateString('en-GB'), { exact: true }).nth(0)
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 10000 });
 });
 
-// TODO: Test 12-hour clock format
+test('test that organization time entry settings can be toggled', async ({ page }) => {
+    await goToOrganizationSettings(page);
+
+    const preventOverlappingCheckbox = page.getByLabel(
+        'Prevent overlapping time entries (new entries only)'
+    );
+    const manageTasksCheckbox = page.getByLabel('Allow Employees to manage tasks');
+
+    // Get current states and toggle both
+    const wasOverlappingChecked = await preventOverlappingCheckbox.isChecked();
+    const wasManageTasksChecked = await manageTasksCheckbox.isChecked();
+
+    if (wasOverlappingChecked) {
+        await preventOverlappingCheckbox.uncheck();
+    } else {
+        await preventOverlappingCheckbox.check();
+    }
+
+    if (wasManageTasksChecked) {
+        await manageTasksCheckbox.uncheck();
+    } else {
+        await manageTasksCheckbox.check();
+    }
+
+    // Save
+    const settingsForm = page.locator('form').filter({ hasText: 'Prevent overlapping' });
+    await Promise.all([
+        settingsForm.getByRole('button', { name: 'Save' }).click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/organizations/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200 &&
+                (await response.json()).data.prevent_overlapping_time_entries ===
+                    !wasOverlappingChecked
+        ),
+    ]);
+
+    // Reload and verify both settings persisted
+    await page.reload();
+    await expect(preventOverlappingCheckbox).toBeChecked({ checked: !wasOverlappingChecked });
+    await expect(manageTasksCheckbox).toBeChecked({ checked: !wasManageTasksChecked });
+
+    // Toggle both back to restore original state
+    if (!wasOverlappingChecked) {
+        await preventOverlappingCheckbox.uncheck();
+    } else {
+        await preventOverlappingCheckbox.check();
+    }
+
+    if (!wasManageTasksChecked) {
+        await manageTasksCheckbox.uncheck();
+    } else {
+        await manageTasksCheckbox.check();
+    }
+
+    await Promise.all([
+        settingsForm.getByRole('button', { name: 'Save' }).click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/organizations/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200 &&
+                (await response.json()).data.prevent_overlapping_time_entries ===
+                    wasOverlappingChecked
+        ),
+    ]);
+});
+
+test('test that 12-hour clock format can be set', async ({ page }) => {
+    await goToOrganizationSettings(page);
+
+    await page.getByLabel('Time Format').click();
+    await page.getByRole('option', { name: '12-hour clock' }).click();
+    await Promise.all([
+        page
+            .locator('form')
+            .filter({ hasText: 'Time Format' })
+            .getByRole('button', { name: 'Save' })
+            .click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/organizations/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200 &&
+                (await response.json()).data.time_format === '12-hours'
+        ),
+    ]);
+
+    // Reload and verify it persisted
+    await page.reload();
+    await expect(page.getByLabel('Time Format')).toContainText('12-hour clock');
+
+    // Reset back to 24-hour
+    await page.getByLabel('Time Format').click();
+    await page.getByRole('option', { name: '24-hour clock' }).click();
+    await Promise.all([
+        page
+            .locator('form')
+            .filter({ hasText: 'Time Format' })
+            .getByRole('button', { name: 'Save' })
+            .click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/organizations/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200 &&
+                (await response.json()).data.time_format === '24-hours'
+        ),
+    ]);
+});
+
+test('test that format settings persist after page reload', async ({ page }) => {
+    await goToOrganizationSettings(page);
+
+    // Set a specific date format
+    await page.getByLabel('Date Format').click();
+    await page.getByRole('option', { name: 'DD/MM/YYYY' }).click();
+    await Promise.all([
+        page
+            .locator('form')
+            .filter({ hasText: 'Date Format' })
+            .getByRole('button', { name: 'Save' })
+            .click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/organizations/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+    ]);
+
+    // Reload and verify it persisted
+    await page.reload();
+    await expect(page.getByLabel('Date Format')).toContainText('DD/MM/YYYY');
+});
+
+// =============================================
+// Admin Permission Tests
+// =============================================
+
+test.describe('Admin Organization Settings Access', () => {
+    test('admin can see and edit organization settings', async ({ ctx, admin }) => {
+        await admin.page.goto(PLAYWRIGHT_BASE_URL + '/teams/' + ctx.orgId);
+
+        // Organization Name section is visible
+        await expect(
+            admin.page.getByRole('heading', { name: 'Organization Name', level: 3 })
+        ).toBeVisible({ timeout: 10000 });
+
+        // Editable settings sections should be visible
+        await expect(
+            admin.page.getByRole('heading', { name: 'Billable Rate', level: 3 })
+        ).toBeVisible();
+        await expect(
+            admin.page.getByRole('heading', { name: 'Format Settings', level: 3 })
+        ).toBeVisible();
+        await expect(
+            admin.page.getByRole('heading', { name: 'Organization Settings', level: 3 })
+        ).toBeVisible();
+
+        // Save buttons should be visible (admin can update)
+        await expect(admin.page.getByRole('button', { name: 'Save' }).first()).toBeVisible();
+
+        // Delete organization should NOT be visible (owner only)
+        await expect(
+            admin.page.getByRole('heading', { name: 'Delete Organization' })
+        ).not.toBeVisible();
+    });
+});
+
+// =============================================
+// Employee Permission Tests
+// =============================================
+
+test.describe('Employee Organization Settings Restrictions', () => {
+    test('employee can see org name but not editable settings', async ({ ctx, employee }) => {
+        await employee.page.goto(PLAYWRIGHT_BASE_URL + '/teams/' + ctx.orgId);
+
+        // Organization Name section is visible (but inputs are disabled)
+        await expect(
+            employee.page.getByRole('heading', { name: 'Organization Name', level: 3 })
+        ).toBeVisible({ timeout: 10000 });
+
+        // Editable settings sections should NOT be visible
+        await expect(
+            employee.page.getByRole('heading', { name: 'Billable Rate', level: 3 })
+        ).not.toBeVisible();
+        await expect(
+            employee.page.getByRole('heading', { name: 'Format Settings', level: 3 })
+        ).not.toBeVisible();
+        await expect(
+            employee.page.getByRole('heading', { name: 'Organization Settings', level: 3 })
+        ).not.toBeVisible();
+
+        // Save button should not be visible (employee cannot update)
+        await expect(employee.page.getByRole('button', { name: 'Save' })).not.toBeVisible();
+    });
+});

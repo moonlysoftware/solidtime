@@ -2,10 +2,9 @@
 import ProjectMoreOptionsDropdown from '@/Components/Common/Project/ProjectMoreOptionsDropdown.vue';
 import type { Project } from '@/packages/api/src';
 import { computed, ref, inject, type ComputedRef } from 'vue';
-import { CheckCircleIcon } from '@heroicons/vue/20/solid';
-import { useClientsStore } from '@/utils/useClients';
-import { storeToRefs } from 'pinia';
-import { useTasksStore } from '@/utils/useTasks';
+import { CheckCircleIcon, ArchiveBoxIcon } from '@heroicons/vue/24/outline';
+import { useClientsQuery } from '@/utils/useClientsQuery';
+import { useTasksQuery } from '@/utils/useTasksQuery';
 import { useProjectsStore } from '@/utils/useProjects';
 import TableRow from '@/Components/TableRow.vue';
 import ProjectEditModal from '@/Components/Common/Project/ProjectEditModal.vue';
@@ -17,8 +16,8 @@ import { formatHumanReadableDuration } from '../../../packages/ui/src/utils/time
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 import type { Organization } from '@/packages/api/src';
 
-const { clients } = storeToRefs(useClientsStore());
-const { tasks } = storeToRefs(useTasksStore());
+const { clients } = useClientsQuery();
+const { tasks } = useTasksQuery();
 
 const props = defineProps<{
     project: Project;
@@ -116,9 +115,15 @@ const showEditProjectModal = ref(false);
             {{ billableRateInfo }}
         </div>
         <div
-            class="whitespace-nowrap px-3 py-4 text-sm text-text-secondary flex space-x-1 items-center font-medium">
-            <CheckCircleIcon class="w-5"></CheckCircleIcon>
-            <span>Active</span>
+            class="whitespace-nowrap px-3 py-4 text-sm text-text-secondary flex space-x-1.5 items-center font-medium">
+            <template v-if="project.is_archived">
+                <ArchiveBoxIcon class="w-4 text-icon-default"></ArchiveBoxIcon>
+                <span>Archived</span>
+            </template>
+            <template v-else>
+                <CheckCircleIcon class="w-4 text-icon-default"></CheckCircleIcon>
+                <span>Active</span>
+            </template>
         </div>
         <div
             class="relative whitespace-nowrap flex items-center pl-3 text-right text-sm font-medium pr-4 sm:pr-6 lg:pr-8 3xl:pr-12">

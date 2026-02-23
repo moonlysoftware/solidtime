@@ -78,6 +78,33 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
         $response->assertJsonCount(4, 'data');
     }
 
+    public function test_index_endpoint_returns_tasks_ordered_by_created_at_descending(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'tasks:view',
+            'tasks:view:all',
+        ]);
+        $taskOldest = Task::factory()->forOrganization($data->organization)->create([
+            'created_at' => now()->subDays(3),
+        ]);
+        $taskNewest = Task::factory()->forOrganization($data->organization)->create([
+            'created_at' => now()->subDay(),
+        ]);
+        $taskMiddle = Task::factory()->forOrganization($data->organization)->create([
+            'created_at' => now()->subDays(2),
+        ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.tasks.index', [$data->organization->getKey(), 'done' => 'all']));
+
+        // Assert
+        $response->assertStatus(200);
+        $ids = collect($response->json('data'))->pluck('id')->values()->toArray();
+        $this->assertSame([$taskNewest->getKey(), $taskMiddle->getKey(), $taskOldest->getKey()], $ids);
+    }
+
     public function test_index_endpoint_without_filter_done_returns_list_of_all_tasks_of_organization(): void
     {
         // Arrange
@@ -299,7 +326,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:create',
+            'tasks:create:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create([
@@ -324,7 +351,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:create',
+            'tasks:create:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         $otherProject = Project::factory()->forOrganization($data->organization)->create();
@@ -352,7 +379,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:create',
+            'tasks:create:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -376,7 +403,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:create',
+            'tasks:create:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -408,7 +435,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:create',
+            'tasks:create:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -465,7 +492,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         $name = 'Task 1';
@@ -493,7 +520,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         $otherProject = Project::factory()->forOrganization($data->organization)->create();
@@ -523,7 +550,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -547,7 +574,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
         $now = Carbon::now();
         $this->travelTo($now);
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -570,7 +597,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->isDone()->create();
         Passport::actingAs($data->user);
@@ -593,7 +620,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -621,7 +648,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:update',
+            'tasks:update:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -650,7 +677,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:delete',
+            'tasks:delete:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->create();
         Passport::actingAs($data->user);
@@ -669,7 +696,7 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:delete',
+            'tasks:delete:all',
         ]);
         $task = Task::factory()->forOrganization($data->organization)->create();
         TimeEntry::factory()->forMember($data->member)->forTask($task)->forOrganization($data->organization)->create();
@@ -707,12 +734,282 @@ class TaskEndpointTest extends ApiEndpointTestAbstract
     {
         // Arrange
         $data = $this->createUserWithPermission([
-            'tasks:delete',
+            'tasks:delete:all',
         ]);
         $otherData = $this->createUserWithPermission([
-            'tasks:delete',
+            'tasks:delete:all',
         ]);
         $task = Task::factory()->forOrganization($otherData->organization)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->deleteJson(route('api.v1.tasks.destroy', [$data->organization->getKey(), $task->getKey()]));
+
+        // Assert
+        $response->assertForbidden();
+        $this->assertDatabaseHas(Task::class, [
+            'id' => $task->getKey(),
+        ]);
+    }
+
+    public function test_store_endpoint_allows_employee_to_create_task_in_public_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPublic()->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.tasks.store', [$data->organization->getKey()]), [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+        ]);
+
+        // Assert
+        $response->assertStatus(201);
+        $this->assertDatabaseHas(Task::class, [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+            'organization_id' => $data->organization->getKey(),
+        ]);
+    }
+
+    public function test_store_endpoint_allows_employee_to_create_task_in_accessible_private_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPrivate()->create();
+        ProjectMember::factory()->forProject($project)->forMember($data->member)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.tasks.store', [$data->organization->getKey()]), [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+        ]);
+
+        // Assert
+        $response->assertStatus(201);
+        $this->assertDatabaseHas(Task::class, [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+            'organization_id' => $data->organization->getKey(),
+        ]);
+    }
+
+    public function test_store_endpoint_fails_for_employee_creating_task_in_inaccessible_private_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPrivate()->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.tasks.store', [$data->organization->getKey()]), [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+        ]);
+
+        // Assert
+        $response->assertForbidden();
+        $this->assertDatabaseMissing(Task::class, [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+        ]);
+    }
+
+    public function test_store_endpoint_fails_for_employee_when_employees_can_manage_tasks_is_disabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = false;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPublic()->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.tasks.store', [$data->organization->getKey()]), [
+            'name' => 'Employee Task',
+            'project_id' => $project->getKey(),
+        ]);
+
+        // Assert
+        $response->assertForbidden();
+        $this->assertDatabaseMissing(Task::class, [
+            'name' => 'Employee Task',
+        ]);
+    }
+
+    public function test_update_endpoint_allows_employee_to_update_task_in_public_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPublic()->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->putJson(route('api.v1.tasks.update', [$data->organization->getKey(), $task->getKey()]), [
+            'name' => 'Updated by Employee',
+        ]);
+
+        // Assert
+        $response->assertStatus(200);
+        $this->assertDatabaseHas(Task::class, [
+            'id' => $task->getKey(),
+            'name' => 'Updated by Employee',
+        ]);
+    }
+
+    public function test_update_endpoint_allows_employee_to_update_task_in_accessible_private_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPrivate()->create();
+        ProjectMember::factory()->forProject($project)->forMember($data->member)->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->putJson(route('api.v1.tasks.update', [$data->organization->getKey(), $task->getKey()]), [
+            'name' => 'Updated by Employee',
+        ]);
+
+        // Assert
+        $response->assertStatus(200);
+        $this->assertDatabaseHas(Task::class, [
+            'id' => $task->getKey(),
+            'name' => 'Updated by Employee',
+        ]);
+    }
+
+    public function test_update_endpoint_fails_for_employee_updating_task_in_inaccessible_private_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPrivate()->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        $originalName = $task->name;
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->putJson(route('api.v1.tasks.update', [$data->organization->getKey(), $task->getKey()]), [
+            'name' => 'Updated by Employee',
+        ]);
+
+        // Assert
+        $response->assertForbidden();
+        $this->assertDatabaseHas(Task::class, [
+            'id' => $task->getKey(),
+            'name' => $originalName,
+        ]);
+    }
+
+    public function test_update_endpoint_fails_for_employee_when_employees_can_manage_tasks_is_disabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = false;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPublic()->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        $originalName = $task->name;
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->putJson(route('api.v1.tasks.update', [$data->organization->getKey(), $task->getKey()]), [
+            'name' => 'Updated by Employee',
+        ]);
+
+        // Assert
+        $response->assertForbidden();
+        $this->assertDatabaseHas(Task::class, [
+            'id' => $task->getKey(),
+            'name' => $originalName,
+        ]);
+    }
+
+    public function test_delete_endpoint_allows_employee_to_delete_task_in_public_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPublic()->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->deleteJson(route('api.v1.tasks.destroy', [$data->organization->getKey(), $task->getKey()]));
+
+        // Assert
+        $response->assertStatus(204);
+        $this->assertDatabaseMissing(Task::class, [
+            'id' => $task->getKey(),
+        ]);
+    }
+
+    public function test_delete_endpoint_allows_employee_to_delete_task_in_accessible_private_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPrivate()->create();
+        ProjectMember::factory()->forProject($project)->forMember($data->member)->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->deleteJson(route('api.v1.tasks.destroy', [$data->organization->getKey(), $task->getKey()]));
+
+        // Assert
+        $response->assertStatus(204);
+        $this->assertDatabaseMissing(Task::class, [
+            'id' => $task->getKey(),
+        ]);
+    }
+
+    public function test_delete_endpoint_fails_for_employee_deleting_task_in_inaccessible_private_project_when_employees_can_manage_tasks_is_enabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = true;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPrivate()->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->deleteJson(route('api.v1.tasks.destroy', [$data->organization->getKey(), $task->getKey()]));
+
+        // Assert
+        $response->assertForbidden();
+        $this->assertDatabaseHas(Task::class, [
+            'id' => $task->getKey(),
+        ]);
+    }
+
+    public function test_delete_endpoint_fails_for_employee_when_employees_can_manage_tasks_is_disabled(): void
+    {
+        // Arrange
+        $data = $this->createUserWithRole(\App\Enums\Role::Employee);
+        $data->organization->employees_can_manage_tasks = false;
+        $data->organization->save();
+        $project = Project::factory()->forOrganization($data->organization)->isPublic()->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
         Passport::actingAs($data->user);
 
         // Act

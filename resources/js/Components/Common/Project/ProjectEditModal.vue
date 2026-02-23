@@ -6,22 +6,23 @@ import { computed, ref } from 'vue';
 import type { CreateClientBody, CreateProjectBody, Project } from '@/packages/api/src';
 import PrimaryButton from '@/packages/ui/src/Buttons/PrimaryButton.vue';
 import { useProjectsStore } from '@/utils/useProjects';
+import { useClientsStore } from '@/utils/useClients';
 import { useFocus } from '@vueuse/core';
 import ClientDropdown from '@/packages/ui/src/Client/ClientDropdown.vue';
-import Badge from '@/packages/ui/src/Badge.vue';
-import { useClientsStore } from '@/utils/useClients';
-import { storeToRefs } from 'pinia';
+import { useClientsQuery } from '@/utils/useClientsQuery';
 import ProjectColorSelector from '@/packages/ui/src/Project/ProjectColorSelector.vue';
+import { Button } from '@/packages/ui/src/Buttons';
+import { ChevronDown } from 'lucide-vue-next';
 import { UserCircleIcon } from '@heroicons/vue/20/solid';
 import EstimatedTimeSection from '@/packages/ui/src/EstimatedTimeSection.vue';
-import InputLabel from '@/packages/ui/src/Input/InputLabel.vue';
+import { Field, FieldGroup, FieldLabel } from '@/packages/ui/src/field';
 import ProjectBillableRateModal from '@/packages/ui/src/Project/ProjectBillableRateModal.vue';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import ProjectEditBillableSection from '@/packages/ui/src/Project/ProjectEditBillableSection.vue';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 
 const { updateProject } = useProjectsStore();
-const { clients } = storeToRefs(useClientsStore());
+const { clients } = useClientsQuery();
 const show = defineModel('show', { default: false });
 const saving = ref(false);
 const showBillableRateModal = ref(false);
@@ -81,65 +82,47 @@ async function submitBillableRate() {
         </template>
 
         <template #content>
-            <div class="sm:flex items-center space-y-2 sm:space-y-0 sm:space-x-5">
-                <div class="flex-1 flex items-center">
-                    <div class="text-center">
-                        <InputLabel for="color" value="Color" />
-                        <ProjectColorSelector
-                            v-model="project.color"
-                            class="mt-1"></ProjectColorSelector>
-                    </div>
-                </div>
-                <div class="w-full">
-                    <InputLabel for="projectName" value="Project name" />
-                    <TextInput
-                        id="projectName"
-                        ref="projectNameInput"
-                        v-model="project.name"
-                        type="text"
-                        placeholder="Project Name"
-                        class="mt-1 block w-full"
-                        required
-                        autocomplete="projectName"
-                        @keydown.enter="submit()" />
-                </div>
-                <div class="">
-                    <InputLabel for="client" value="Client" />
-                    <ClientDropdown
-                        v-model="project.client_id"
-                        :create-client
-                        :clients="clients"
-                        class="mt-1">
+            <FieldGroup>
+                <FieldGroup class="flex-row items-end">
+                    <Field class="w-auto text-center">
+                        <FieldLabel for="color">Color</FieldLabel>
+                        <ProjectColorSelector v-model="project.color"></ProjectColorSelector>
+                    </Field>
+                    <Field class="w-full">
+                        <FieldLabel for="projectName">Project name</FieldLabel>
+                        <TextInput
+                            id="projectName"
+                            ref="projectNameInput"
+                            v-model="project.name"
+                            type="text"
+                            placeholder="Project Name"
+                            class="block w-full"
+                            required
+                            autocomplete="projectName"
+                            @keydown.enter="submit()" />
+                    </Field>
+                </FieldGroup>
+                <Field>
+                    <FieldLabel for="client" :icon="UserCircleIcon">Client</FieldLabel>
+                    <ClientDropdown v-model="project.client_id" :create-client :clients="clients">
                         <template #trigger>
-                            <Badge
-                                class="bg-input-background cursor-pointer hover:bg-tertiary"
-                                size="xlarge">
-                                <div class="flex items-center space-x-2">
-                                    <UserCircleIcon class="w-5 text-icon-default"></UserCircleIcon>
-                                    <span class="whitespace-nowrap">
-                                        {{ currentClientName }}
-                                    </span>
-                                </div>
-                            </Badge>
+                            <Button variant="input" class="w-full justify-between">
+                                <span class="truncate">{{ currentClientName }}</span>
+                                <ChevronDown class="w-4 h-4 text-icon-default" />
+                            </Button>
                         </template>
                     </ClientDropdown>
-                </div>
-            </div>
-            <div>
-                <div>
-                    <ProjectEditBillableSection
-                        v-model:is-billable="project.is_billable"
-                        v-model:billable-rate="project.billable_rate"
-                        :currency="getOrganizationCurrencyString()"
-                        @submit="submit"></ProjectEditBillableSection>
-                </div>
-                <div>
-                    <EstimatedTimeSection
-                        v-if="isAllowedToPerformPremiumAction()"
-                        v-model="project.estimated_time"
-                        @submit="submit()"></EstimatedTimeSection>
-                </div>
-            </div>
+                </Field>
+                <ProjectEditBillableSection
+                    v-model:is-billable="project.is_billable"
+                    v-model:billable-rate="project.billable_rate"
+                    :currency="getOrganizationCurrencyString()"
+                    @submit="submit"></ProjectEditBillableSection>
+                <EstimatedTimeSection
+                    v-if="isAllowedToPerformPremiumAction()"
+                    v-model="project.estimated_time"
+                    @submit="submit()"></EstimatedTimeSection>
+            </FieldGroup>
         </template>
         <template #footer>
             <SecondaryButton @click="show = false"> Cancel</SecondaryButton>

@@ -2,9 +2,9 @@
 import TextInput from '../../../packages/ui/src/Input/TextInput.vue';
 import SecondaryButton from '../../../packages/ui/src/Buttons/SecondaryButton.vue';
 import DialogModal from '@/packages/ui/src/DialogModal.vue';
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import PrimaryButton from '../../../packages/ui/src/Buttons/PrimaryButton.vue';
-import InputLabel from '../../../packages/ui/src/Input/InputLabel.vue';
+import { Field, FieldLabel } from '@/packages/ui/src/field';
 import type { UpdateReportBody } from '@/packages/api/src';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { getCurrentOrganizationId } from '@/utils/useUser';
@@ -13,6 +13,7 @@ import { Checkbox } from '@/packages/ui/src';
 import DatePicker from '@/packages/ui/src/Input/DatePicker.vue';
 import { useNotificationsStore } from '@/utils/notification';
 import type { Report } from '@/packages/api/src';
+import { getDayJsInstance, getLocalizedDayJs } from '@/packages/ui/src/utils/time';
 
 const show = defineModel('show', { default: false });
 const saving = ref(false);
@@ -61,9 +62,21 @@ watch(
     }
 );
 
+// Intermediate local variable for DatePicker (converts between UTC and localized)
+const localPublicUntil = computed({
+    get: () => {
+        if (!report.value.public_until) return null;
+        return getLocalizedDayJs(report.value.public_until).format();
+    },
+    set: (value: string | null) => {
+        report.value.public_until = value ? getDayJsInstance()(value).utc().format() : null;
+    },
+});
+
 const { handleApiRequestNotifications } = useNotificationsStore();
 
 async function submit() {
+    // public_until is already in UTC format from the computed setter
     await handleApiRequestNotifications(
         () => updateReportMutation.mutateAsync(report.value),
         'Success',
@@ -92,28 +105,30 @@ async function submit() {
 
         <template #content>
             <div class="items-center space-y-4 w-full">
-                <div class="w-full">
-                    <InputLabel for="name" value="Name" />
-                    <TextInput id="name" v-model="report.name" class="mt-1.5 w-full"></TextInput>
-                </div>
-                <div>
-                    <InputLabel for="description" value="Description" />
+                <Field class="w-full">
+                    <FieldLabel for="name">Name</FieldLabel>
+                    <TextInput id="name" v-model="report.name" class="w-full"></TextInput>
+                </Field>
+                <Field>
+                    <FieldLabel for="description">Description</FieldLabel>
                     <TextInput
                         id="description"
                         v-model="report.description"
-                        class="mt-1.5 w-full"></TextInput>
-                </div>
-                <InputLabel value="Visibility" />
-                <div class="flex items-center space-x-12">
-                    <div class="flex items-center space-x-2 px-2 py-3">
-                        <Checkbox id="is_public" v-model:checked="report.is_public"></Checkbox>
-                        <InputLabel for="is_public" value="Public" />
+                        class="w-full"></TextInput>
+                </Field>
+                <Field>
+                    <FieldLabel>Visibility</FieldLabel>
+                    <div class="flex items-center space-x-12">
+                        <Field orientation="horizontal" class="px-2 py-3">
+                            <Checkbox id="is_public" v-model:checked="report.is_public"></Checkbox>
+                            <FieldLabel for="is_public">Public</FieldLabel>
+                        </Field>
+                        <Field v-if="report.is_public" orientation="horizontal">
+                            <FieldLabel for="public_until">Expires at</FieldLabel>
+                            <DatePicker v-model="localPublicUntil"></DatePicker>
+                        </Field>
                     </div>
-                    <div v-if="report.is_public" class="flex items-center space-x-4">
-                        <InputLabel for="public_until" value="Expires at" />
-                        <DatePicker id="public_until"></DatePicker>
-                    </div>
-                </div>
+                </Field>
             </div>
         </template>
         <template #footer>

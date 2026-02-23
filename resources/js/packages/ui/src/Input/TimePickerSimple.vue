@@ -3,7 +3,6 @@ import { ref, watch } from 'vue';
 import { getLocalizedDayJs } from '@/packages/ui/src/utils/time';
 import { useFocus } from '@vueuse/core';
 import { TextInput } from '@/packages/ui/src';
-import { twMerge } from 'tailwind-merge';
 
 // This has to be a localized timestamp, not UTC
 const model = defineModel<string | null>({
@@ -12,11 +11,9 @@ const model = defineModel<string | null>({
 
 const props = withDefaults(
     defineProps<{
-        size?: 'base' | 'large';
         focus?: boolean;
     }>(),
     {
-        size: 'base',
         focus: false,
     }
 );
@@ -25,13 +22,21 @@ function updateTime(event: Event) {
     const target = event.target as HTMLInputElement;
     const newValue = target.value.trim();
     if (newValue.split(':').length === 2) {
-        const [hours, minutes] = newValue.split(':');
+        const [hours, minutes] = newValue.split(':') as [string, string];
         if (!isNaN(parseInt(hours)) && !isNaN(parseInt(minutes))) {
-            model.value = getLocalizedDayJs(model.value)
-                .set('hours', Math.min(parseInt(hours), 23))
-                .set('minutes', Math.min(parseInt(minutes), 59))
-                .format();
-            emit('changed', model.value);
+            const currentTime = getLocalizedDayJs(model.value);
+            const newHours = Math.min(parseInt(hours), 23);
+            const newMinutes = Math.min(parseInt(minutes), 59);
+
+            // Only update if hours or minutes are different
+            if (currentTime.hour() !== newHours || currentTime.minute() !== newMinutes) {
+                model.value = currentTime
+                    .set('hours', newHours)
+                    .set('minutes', newMinutes)
+                    .set('seconds', 0)
+                    .format();
+                emit('changed', model.value);
+            }
         }
     }
     // check if input is only numbers
@@ -42,6 +47,7 @@ function updateTime(event: Event) {
             model.value = getLocalizedDayJs(model.value)
                 .set('hours', Math.min(parseInt(hours), 23))
                 .set('minutes', Math.min(parseInt(minutes), 59))
+                .set('seconds', 0)
                 .format();
             emit('changed', model.value);
         } else if (newValue.length === 3) {
@@ -50,6 +56,7 @@ function updateTime(event: Event) {
             model.value = getLocalizedDayJs(model.value)
                 .set('hours', Math.min(parseInt(hours), 23))
                 .set('minutes', Math.min(parseInt(minutes), 59))
+                .set('seconds', 0)
                 .format();
             emit('changed', model.value);
         } else if (newValue.length === 2) {
@@ -57,6 +64,7 @@ function updateTime(event: Event) {
             model.value = getLocalizedDayJs(model.value)
                 .set('hours', Math.min(parseInt(newValue), 23))
                 .set('minutes', 0)
+                .set('seconds', 0)
                 .format();
             emit('changed', model.value);
         } else if (newValue.length === 1) {
@@ -64,6 +72,7 @@ function updateTime(event: Event) {
             model.value = getLocalizedDayJs(model.value)
                 .set('hours', Math.min(parseInt(newValue), 23))
                 .set('minutes', 0)
+                .set('seconds', 0)
                 .format();
             emit('changed', model.value);
         }
@@ -89,7 +98,7 @@ const inputValue = ref(model.value ? getLocalizedDayJs(model.value).format('HH:m
         v-bind="$attrs"
         ref="timeInput"
         v-model="inputValue"
-        :class="twMerge('text-center w-24 px-3 py-2', size === 'large' && 'w-28')"
+        class="text-center w-full"
         data-testid="time_picker_input"
         type="text"
         @blur="updateTime"

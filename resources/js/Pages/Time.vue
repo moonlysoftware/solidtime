@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import AppLayout from '@/Layouts/AppLayout.vue';
 import TimeTracker from '@/Components/TimeTracker.vue';
-import { onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
-import { useTimeEntriesStore } from '@/utils/useTimeEntries';
 import { storeToRefs } from 'pinia';
 import type {
     CreateClientBody,
@@ -17,65 +16,66 @@ import { useElementVisibility } from '@vueuse/core';
 import { ClockIcon } from '@heroicons/vue/20/solid';
 import LoadingSpinner from '@/packages/ui/src/LoadingSpinner.vue';
 import { useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
-import { useTasksStore } from '@/utils/useTasks';
-import { useProjectsStore } from '@/utils/useProjects';
+import { useTasksQuery } from '@/utils/useTasksQuery';
+import { useProjectsQuery } from '@/utils/useProjectsQuery';
 import TimeEntryGroupedTable from '@/packages/ui/src/TimeEntry/TimeEntryGroupedTable.vue';
-import { useTagsStore } from '@/utils/useTags';
-import { useClientsStore } from '@/utils/useClients';
+import { useTagsQuery } from '@/utils/useTagsQuery';
+import { useClientsQuery } from '@/utils/useClientsQuery';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import TimeEntryMassActionRow from '@/packages/ui/src/TimeEntry/TimeEntryMassActionRow.vue';
 import type { UpdateMultipleTimeEntriesChangeset } from '@/packages/api/src';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 import { canCreateProjects } from '@/utils/permissions';
+import { useTagsStore } from '@/utils/useTags';
+import { useProjectsStore } from '@/utils/useProjects';
+import { useClientsStore } from '@/utils/useClients';
+import { useTimeEntriesInfiniteQuery } from '@/utils/useTimeEntriesInfiniteQuery';
+import { useTimeEntriesMutations } from '@/utils/useTimeEntriesMutations';
 
-const timeEntriesStore = useTimeEntriesStore();
-const { timeEntries, allTimeEntriesLoaded } = storeToRefs(timeEntriesStore);
-const { updateTimeEntry, fetchTimeEntries, createTimeEntry } = useTimeEntriesStore();
+const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isPending } =
+    useTimeEntriesInfiniteQuery();
+const {
+    createTimeEntry: createTimeEntryMutation,
+    updateTimeEntry,
+    updateTimeEntries: updateTimeEntriesMutation,
+    deleteTimeEntries: deleteTimeEntriesMutation,
+} = useTimeEntriesMutations();
+
+const timeEntries = computed(() => data.value?.pages.flatMap((page) => page.data) || []);
 
 async function updateTimeEntries(ids: string[], changes: UpdateMultipleTimeEntriesChangeset) {
-    await useTimeEntriesStore().updateTimeEntries(ids, changes);
-    fetchTimeEntries();
+    await updateTimeEntriesMutation({ ids, changes });
 }
 
-const loading = ref(false);
 const loadMoreContainer = ref<HTMLDivElement | null>(null);
 const isLoadMoreVisible = useElementVisibility(loadMoreContainer);
 const currentTimeEntryStore = useCurrentTimeEntryStore();
 const { currentTimeEntry } = storeToRefs(currentTimeEntryStore);
 const { setActiveState } = currentTimeEntryStore;
-const { tags } = storeToRefs(useTagsStore());
 
 async function startTimeEntry(timeEntry: Omit<CreateTimeEntryBody, 'member_id'>) {
     if (currentTimeEntry.value.id) {
         await setActiveState(false);
     }
-    await createTimeEntry(timeEntry);
-    fetchTimeEntries();
+    await createTimeEntryMutation(timeEntry);
     useCurrentTimeEntryStore().fetchCurrentTimeEntry();
 }
 
-function deleteTimeEntries(timeEntries: TimeEntry[]) {
-    useTimeEntriesStore().deleteTimeEntries(timeEntries);
-    fetchTimeEntries();
+async function deleteTimeEntries(timeEntries: TimeEntry[]) {
+    await deleteTimeEntriesMutation(timeEntries);
 }
 
 watch(isLoadMoreVisible, async (isVisible) => {
-    if (isVisible && timeEntries.value.length > 0 && !allTimeEntriesLoaded.value) {
-        loading.value = true;
-        await timeEntriesStore.fetchMoreTimeEntries();
+    if (isVisible && hasNextPage.value) {
+        await fetchNextPage();
     }
 });
 
-onMounted(async () => {
-    await timeEntriesStore.fetchTimeEntries();
-});
+const { projects } = useProjectsQuery();
+const { tasks } = useTasksQuery();
+const { clients } = useClientsQuery();
 
-const projectStore = useProjectsStore();
-const { projects } = storeToRefs(projectStore);
-const taskStore = useTasksStore();
-const { tasks } = storeToRefs(taskStore);
-const clientStore = useClientsStore();
-const { clients } = storeToRefs(clientStore);
+const { tags } = useTagsQuery();
 
 async function createTag(name: string) {
     return await useTagsStore().createTag(name);
@@ -91,7 +91,6 @@ const selectedTimeEntries = ref([] as TimeEntry[]);
 
 async function clearSelectionAndState() {
     selectedTimeEntries.value = [];
-    await fetchTimeEntries();
 }
 
 function deleteSelected() {
@@ -116,7 +115,7 @@ function deleteSelected() {
             :tags="tags"
             :currency="getOrganizationCurrencyString()"
             :clients="clients"
-            class="border-t border-default-background-separator"
+            class="border-t border-default-background-separator hidden sm:block"
             :update-time-entries="
                 (args) =>
                     updateTimeEntries(
@@ -147,21 +146,24 @@ function deleteSelected() {
             :currency="getOrganizationCurrencyString()"
             :time-entries="timeEntries"
             :tags="tags"></TimeEntryGroupedTable>
-        <div v-if="timeEntries.length === 0" class="text-center pt-12">
+        <div v-if="isPending" class="flex justify-center items-center py-12">
+            <LoadingSpinner></LoadingSpinner>
+        </div>
+        <div v-else-if="timeEntries.length === 0" class="text-center pt-12">
             <ClockIcon class="w-8 text-icon-default inline pb-2"></ClockIcon>
             <h3 class="text-text-primary font-semibold">No time entries found</h3>
             <p class="pb-5">Create your first time entry now!</p>
         </div>
         <div ref="loadMoreContainer">
             <div
-                v-if="loading && !allTimeEntriesLoaded"
+                v-if="isFetchingNextPage"
                 class="flex justify-center items-center py-5 text-text-primary font-medium">
                 <LoadingSpinner></LoadingSpinner>
                 <span> Loading more time entries... </span>
             </div>
             <div
-                v-else-if="allTimeEntriesLoaded"
-                class="flex justify-center items-center py-5 text-text-secondary font-medium">
+                v-else-if="!hasNextPage && timeEntries.length > 0"
+                class="flex justify-center items-center py-5 text-sm text-text-tertiary">
                 All time entries are loaded!
             </div>
         </div>

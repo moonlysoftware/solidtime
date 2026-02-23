@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\V1;
 
 use App\Exceptions\Api\InactiveUserCanNotBeUsedApiException;
 use App\Exceptions\Api\UserIsAlreadyMemberOfProjectApiException;
+use App\Http\Requests\V1\ProjectMember\ProjectMemberIndexRequest;
 use App\Http\Requests\V1\ProjectMember\ProjectMemberStoreRequest;
 use App\Http\Requests\V1\ProjectMember\ProjectMemberUpdateRequest;
 use App\Http\Resources\V1\ProjectMember\ProjectMemberCollection;
@@ -41,12 +42,13 @@ class ProjectMemberController extends Controller
      *
      * @operationId getProjectMembers
      */
-    public function index(Organization $organization, Project $project): ProjectMemberCollection
+    public function index(Organization $organization, Project $project, ProjectMemberIndexRequest $request): ProjectMemberCollection
     {
         $this->checkPermission($organization, 'project-members:view', $project);
 
         $projectMembers = ProjectMember::query()
             ->whereBelongsTo($project, 'project')
+            ->orderBy('created_at', 'desc')
             ->paginate(config('app.pagination_per_page_default'));
 
         return new ProjectMemberCollection($projectMembers);

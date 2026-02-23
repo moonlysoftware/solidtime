@@ -4,7 +4,6 @@ import Banner from '@/Components/Banner.vue';
 import OrganizationSwitcher from '@/Components/OrganizationSwitcher.vue';
 import CurrentSidebarTimer from '@/Components/CurrentSidebarTimer.vue';
 import {
-    Bars3Icon,
     CalendarIcon,
     ChartBarIcon,
     ClockIcon,
@@ -12,18 +11,21 @@ import {
     CreditCardIcon,
     FolderIcon,
     HomeIcon,
+    MagnifyingGlassIcon,
     TagIcon,
     UserCircleIcon,
     UserGroupIcon,
     XMarkIcon,
     DocumentTextIcon,
 } from '@heroicons/vue/20/solid';
+import { PanelLeft } from 'lucide-vue-next';
 import NavigationSidebarItem from '@/Components/NavigationSidebarItem.vue';
 import UserSettingsIcon from '@/Components/UserSettingsIcon.vue';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
-import { computed, onMounted, provide, ref } from 'vue';
+import { nextTick, onMounted, provide, ref } from 'vue';
 import NotificationContainer from '@/Components/NotificationContainer.vue';
-import { initializeStores, refreshStores } from '@/utils/init';
+import { initializeStores } from '@/utils/init';
+import { useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
 import {
     canManageBilling,
     canUpdateOrganization,
@@ -42,13 +44,16 @@ import UpdateSidebarNotification from '@/Components/UpdateSidebarNotification.vu
 import BillingBanner from '@/Components/Billing/BillingBanner.vue';
 import UserTimezoneMismatchModal from '@/Components/Common/User/UserTimezoneMismatchModal.vue';
 import { useTheme } from '@/utils/theme';
-import { useQuery } from '@tanstack/vue-query';
-import { api } from '@/packages/api/src';
+import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
 import { getCurrentOrganizationId } from '@/utils/useUser';
 import LoadingSpinner from '@/packages/ui/src/LoadingSpinner.vue';
 import { twMerge } from 'tailwind-merge';
-import Button from '@/Components/ui/button/Button.vue';
+import { Button } from '@/packages/ui/src/Buttons';
 import { openFeedback } from '@/utils/feedback';
+import { CommandPaletteProvider } from '@/Components/CommandPalette';
+import { useCommandPalette } from '@/utils/useCommandPalette';
+
+const { openPalette } = useCommandPalette();
 
 defineProps({
     title: String,
@@ -56,23 +61,31 @@ defineProps({
 });
 
 const showSidebarMenu = ref(false);
+const sidebarVisible = ref(false);
+
+function openSidebar() {
+    showSidebarMenu.value = true;
+    nextTick(() => {
+        requestAnimationFrame(() => {
+            sidebarVisible.value = true;
+        });
+    });
+}
+
+function closeSidebar() {
+    sidebarVisible.value = false;
+    setTimeout(() => {
+        showSidebarMenu.value = false;
+    }, 200);
+}
+
 const isUnloading = ref(false);
 
-const { data: organization, isLoading: isOrganizationLoading } = useQuery({
-    queryKey: ['organization', getCurrentOrganizationId()],
-    queryFn: () =>
-        api.getOrganization({
-            params: {
-                organization: getCurrentOrganizationId()!,
-            },
-        }),
-    enabled: !!getCurrentOrganizationId(),
-});
-
-provide(
-    'organization',
-    computed(() => organization.value?.data)
+const { organization, isLoading: isOrganizationLoading } = useOrganizationQuery(
+    getCurrentOrganizationId()!
 );
+
+provide('organization', organization);
 
 onMounted(async () => {
     useTheme();
@@ -89,9 +102,10 @@ onMounted(async () => {
             await fetchToken();
         }
         setTimeout(() => {
-            // prevent store refreshing on navigation
+            // TanStack Query automatically refetches on window focus
+            // Only refresh non-migrated stores
             if (isUnloading.value === false) {
-                refreshStores();
+                useCurrentTimeEntryStore().fetchCurrentTimeEntry();
             }
         }, 100);
     };
@@ -106,15 +120,44 @@ const page = usePage<{
 
 <template>
     <div v-bind="$attrs" class="flex flex-wrap bg-background text-text-secondary">
+        <!-- Mobile sidebar overlay -->
+        <Teleport to="body">
+            <div v-if="showSidebarMenu" class="fixed inset-0 z-40 lg:hidden" @click="closeSidebar">
+                <div
+                    class="absolute inset-0 bg-default-background transition-opacity duration-200"
+                    :class="sidebarVisible ? 'opacity-50' : 'opacity-0'" />
+            </div>
+        </Teleport>
+
         <div
-            :class="{
-                '!flex bg-default-background w-full z-30': showSidebarMenu,
-            }"
-            class="flex-shrink-0 h-screen hidden fixed w-[230px] 2xl:w-[250px] px-2.5 2xl:px-3 py-4 lg:flex flex-col justify-between">
+            :class="[
+                sidebarVisible
+                    ? 'max-lg:translate-x-0 max-lg:shadow-xl'
+                    : 'max-lg:-translate-x-full',
+            ]"
+            class="flex-shrink-0 h-screen fixed w-[280px] px-2.5 py-4 hidden lg:flex flex-col justify-between bg-background border-r border-default-background-separator max-lg:z-50 max-lg:transition-transform max-lg:duration-200 max-lg:ease-in-out lg:w-[230px] 2xl:w-[250px] 2xl:px-3 lg:border-r-0"
+            :style="showSidebarMenu ? { display: 'flex' } : undefined">
             <div class="flex flex-col h-full">
-                <div class="border-b border-default-background-separator pb-2 flex justify-between">
-                    <OrganizationSwitcher class="w-full"></OrganizationSwitcher>
-                    <XMarkIcon class="w-8 lg:hidden" @click="showSidebarMenu = false"></XMarkIcon>
+                <div
+                    class="border-b border-default-background-separator pb-2 flex items-center gap-1">
+                    <div class="flex-1 min-w-0 overflow-hidden">
+                        <OrganizationSwitcher></OrganizationSwitcher>
+                    </div>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        class="h-7 w-7 flex-shrink-0"
+                        data-testid="command_palette_button"
+                        @click="openPalette">
+                        <MagnifyingGlassIcon class="h-4 w-4 text-icon-default" />
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        class="h-7 w-7 flex-shrink-0 lg:hidden"
+                        @click="closeSidebar">
+                        <XMarkIcon class="h-4 w-4 text-icon-default" />
+                    </Button>
                 </div>
                 <div class="border-b border-default-background-separator">
                     <CurrentSidebarTimer></CurrentSidebarTimer>
@@ -270,10 +313,24 @@ const page = usePage<{
                 class="h-screen overflow-y-auto flex flex-col bg-default-background border-l border-default-background-separator">
                 <div
                     class="lg:hidden w-full px-3 py-1 border-b border-b-default-background-separator text-text-secondary flex justify-between items-center">
-                    <Bars3Icon
-                        class="w-7 text-text-secondary"
-                        @click="showSidebarMenu = !showSidebarMenu"></Bars3Icon>
-                    <OrganizationSwitcher></OrganizationSwitcher>
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        class="h-7 w-7 shrink-0"
+                        @click="openSidebar">
+                        <PanelLeft class="h-4 w-4 text-icon-default" />
+                    </Button>
+                    <div class="flex items-center gap-1">
+                        <OrganizationSwitcher></OrganizationSwitcher>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            class="h-7 w-7 shrink-0"
+                            data-testid="command_palette_button_mobile"
+                            @click="openPalette">
+                            <MagnifyingGlassIcon class="h-4 w-4 text-icon-default" />
+                        </Button>
+                    </div>
                 </div>
 
                 <Head :title="title" />
@@ -306,4 +363,5 @@ const page = usePage<{
     </div>
     <NotificationContainer></NotificationContainer>
     <UserTimezoneMismatchModal></UserTimezoneMismatchModal>
+    <CommandPaletteProvider></CommandPaletteProvider>
 </template>

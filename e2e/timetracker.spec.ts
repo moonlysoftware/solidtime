@@ -7,8 +7,12 @@ import {
     startOrStopTimerWithButton,
     stoppedTimeEntryResponse,
 } from './utils/currentTimeEntry';
-import { Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { newTagResponse } from './utils/tags';
+import { updateOrganizationCurrencyViaWeb } from './utils/api';
+
+// Date picker button name patterns for different date formats
+const DATE_DISPLAY_PATTERN = /^\d{4}-\d{2}-\d{2}$|^\d{2}\/\d{2}\/\d{4}$|^\d{2}\.\d{2}\.\d{4}$/;
 
 async function goToDashboard(page: Page) {
     await page.goto(PLAYWRIGHT_BASE_URL + '/dashboard');
@@ -18,20 +22,35 @@ test('test that starting and stopping a timer without description and project wo
     page,
 }) => {
     await goToDashboard(page);
-    await Promise.all([
-        newTimeEntryResponse(page),
-        startOrStopTimerWithButton(page),
-        assertThatTimerHasStarted(page),
-    ]);
+    await Promise.all([newTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
+    await assertThatTimerHasStarted(page);
     await page.waitForTimeout(1500);
     await Promise.all([stoppedTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
     await assertThatTimerIsStopped(page);
 });
 
+test('test that billable icon shows dollar sign for USD currency', async ({ page, ctx }) => {
+    await updateOrganizationCurrencyViaWeb(ctx, 'USD');
+    await goToDashboard(page);
+    await page.waitForLoadState('networkidle');
+    const billableButton = page.getByRole('button', { name: 'Non Billable' }).first();
+    await expect(billableButton).toBeVisible();
+    await expect(billableButton.locator('svg')).toHaveAttribute('viewBox', '0 0 8 14');
+});
+
+test('test that billable icon shows euro sign for EUR currency', async ({ page, ctx }) => {
+    await updateOrganizationCurrencyViaWeb(ctx, 'EUR');
+    await goToDashboard(page);
+    await page.waitForLoadState('networkidle');
+    const billableButton = page.getByRole('button', { name: 'Non Billable' }).first();
+    await expect(billableButton).toBeVisible();
+    await expect(billableButton.locator('svg')).toHaveAttribute('viewBox', '0 0 12 12');
+});
+
 test('test that starting and stopping a timer with a description works', async ({ page }) => {
     await goToDashboard(page);
-    // TODO: Fix flakyness by disabling description input field until timer is loaded
-    await page.waitForTimeout(500);
+    // Wait for the description input to be editable before filling
+    await expect(page.getByTestId('time_entry_description')).toBeEditable();
     await page.getByTestId('time_entry_description').fill('New Time Entry Description');
     await Promise.all([
         newTimeEntryResponse(page, {
@@ -57,13 +76,12 @@ test('test that starting the time entry starts the live timer and that it keeps 
 
     await Promise.all([newTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
     await assertThatTimerHasStarted(page);
-    await page.waitForTimeout(500);
     const beforeTimerValue = await page.getByTestId('time_entry_time').inputValue();
     await page.waitForTimeout(2000);
     const afterWaitTimeValue = await page.getByTestId('time_entry_time').inputValue();
     expect(afterWaitTimeValue).not.toEqual(beforeTimerValue);
     await page.reload();
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('time_entry_time')).toBeVisible();
 
     const afterReloadTimerValue = await page.getByTestId('time_entry_time').inputValue();
     await page.waitForTimeout(2000);
@@ -76,7 +94,7 @@ test('test that starting and updating the description while running works', asyn
 
     await Promise.all([newTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
     await assertThatTimerHasStarted(page);
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('time_entry_description')).toBeEditable();
     await page.getByTestId('time_entry_description').fill('New Time Entry Description');
 
     await Promise.all([
@@ -86,7 +104,6 @@ test('test that starting and updating the description while running works', asyn
         }),
         page.getByTestId('time_entry_description').press('Tab'),
     ]);
-    await page.waitForTimeout(500);
     await Promise.all([
         stoppedTimeEntryResponse(page, {
             description: 'New Time Entry Description',
@@ -103,7 +120,7 @@ test('test that starting and updating the time while running works', async ({ pa
         await startOrStopTimerWithButton(page),
     ]);
     await assertThatTimerHasStarted(page);
-    await page.waitForTimeout(500);
+    await expect(page.getByTestId('time_entry_time')).toBeEditable();
     await page.getByTestId('time_entry_time').fill('20min');
 
     await Promise.all([
@@ -127,7 +144,6 @@ test('test that starting and updating the time while running works', async ({ pa
     ]);
 
     await expect(page.getByTestId('time_entry_time')).toHaveValue(/00:20/);
-    await page.waitForTimeout(500);
     await Promise.all([stoppedTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
     await assertThatTimerIsStopped(page);
 });
@@ -143,9 +159,7 @@ test('test that entering a human readable time starts the timer on blur', async 
     await assertThatTimerHasStarted(page);
 
     await Promise.all([stoppedTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
-    await page.locator(
-        '[data-testid="dashboard_timer"] [data-testid="timer_button"].bg-accent-300/70'
-    );
+    await assertThatTimerIsStopped(page);
 });
 
 test('test that entering a number in the time range starts the timer on blur', async ({ page }) => {
@@ -159,9 +173,7 @@ test('test that entering a number in the time range starts the timer on blur', a
     await assertThatTimerHasStarted(page);
 
     await Promise.all([stoppedTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
-    await page.locator(
-        '[data-testid="dashboard_timer"] [data-testid="timer_button"].bg-accent-300/70'
-    );
+    await assertThatTimerIsStopped(page);
 });
 
 test('test that entering a value with the format hh:mm in the time range starts the timer on blur', async ({
@@ -177,9 +189,7 @@ test('test that entering a value with the format hh:mm in the time range starts 
     await assertThatTimerHasStarted(page);
 
     await Promise.all([stoppedTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
-    await page.locator(
-        '[data-testid="dashboard_timer"] [data-testid="timer_button"].bg-accent-300/70'
-    );
+    await assertThatTimerIsStopped(page);
 });
 
 test('test that entering a random value in the time range does not start the timer on blur', async ({
@@ -187,10 +197,8 @@ test('test that entering a random value in the time range does not start the tim
 }) => {
     await goToDashboard(page);
     await page.getByTestId('time_entry_time').fill('asdasdasd');
-    await page.getByTestId('time_entry_time').press('Tab'),
-        await page.locator(
-            '[data-testid="dashboard_timer"] [data-testid="timer_button"].bg-accent-300/70'
-        );
+    await page.getByTestId('time_entry_time').press('Tab');
+    await assertThatTimerIsStopped(page);
 });
 
 test('test that entering a time starts the timer on enter', async ({ page }) => {
@@ -218,6 +226,11 @@ test('test that adding a new tag works', async ({ page }) => {
         page.getByRole('button', { name: 'Create Tag' }).click(),
     ]);
 
+    // Wait for tags query refetch after invalidation
+    await page.waitForResponse(
+        (response) => response.url().includes('/tags') && response.status() === 200
+    );
+
     await page.getByTestId('tag_dropdown').click();
     await expect(page.getByRole('option', { name: newTagName })).toBeVisible();
 });
@@ -240,7 +253,7 @@ test('test that adding a new tag when the timer is running', async ({ page }) =>
     await page.getByTestId('tag_dropdown').click();
     await expect(page.getByRole('option', { name: newTagName })).toBeVisible();
     await page.getByTestId('tag_dropdown_search').press('Escape');
-    await page.waitForTimeout(1000);
+    await expect(page.getByTestId('tag_dropdown_search')).not.toBeVisible();
 
     await Promise.all([
         stoppedTimeEntryResponse(page, { tags: [tagId] }),
@@ -249,18 +262,143 @@ test('test that adding a new tag when the timer is running', async ({ page }) =>
     await assertThatTimerIsStopped(page);
 });
 
-// test that search is working
+test('test that setting an end time with a different date via the timetracker range selector works', async ({
+    page,
+}) => {
+    await goToDashboard(page);
 
-// test that adding a tag and project and starting the timer afterwards works and sets the project and tag correctly
+    // Start a timer
+    await Promise.all([newTimeEntryResponse(page), startOrStopTimerWithButton(page)]);
+    await assertThatTimerHasStarted(page);
 
-// test that changing the project works
+    // Open the time range dropdown by clicking on the time display
+    await page.getByTestId('time_entry_time').click();
+    const rangeStart = page.getByTestId('time_entry_range_start');
+    await expect(rangeStart).toBeVisible();
 
-// test that sidebar timetracker starts and stops timer
+    // Click "Set End Time" button
+    await page.getByRole('button', { name: 'Set End Time' }).click();
 
-// test that sidebar timetracker changes state when tmer on dashboard is started
+    // The end time picker should now be visible with a Confirm button
+    const rangeEnd = page.getByTestId('time_entry_range_end');
+    await expect(rangeEnd).toBeVisible();
+    const confirmButton = page.getByRole('button', { name: 'Confirm' });
+    await expect(confirmButton).toBeVisible();
 
-// test billable toggle
+    // Click the end date picker to change the date
+    const endDatePickers = page.getByRole('button', { name: DATE_DISPLAY_PATTERN });
+    // The second date picker is the end date (first is the start date)
+    const endDatePicker = endDatePickers.nth(1);
+    await expect(endDatePicker).toBeVisible();
+    await endDatePicker.click();
 
-// TODO: Test that project can be created in the time tracker row
+    // Calendar should appear
+    const calendarGrid = page.getByRole('grid');
+    await expect(calendarGrid).toBeVisible({ timeout: 5000 });
 
-// Add Test that time tracker starts on enter with description
+    // Navigate to the next month and select a day to ensure end > start
+    await page.getByRole('button', { name: /Next/i }).click();
+    await page.getByRole('gridcell').filter({ hasText: /^15$/ }).first().click();
+
+    // The dropdown should still be open after selecting a date (not auto-closed)
+    await expect(rangeEnd).toBeVisible();
+    await expect(confirmButton).toBeVisible();
+
+    // Click Confirm to finalize and verify the API call
+    const [updateResponse] = await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/time-entries') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+        confirmButton.click(),
+    ]);
+    const updateBody = await updateResponse.json();
+    expect(updateBody.data.start).toBeTruthy();
+    expect(updateBody.data.end).toBeTruthy();
+});
+
+test('test that timer starts on enter with description', async ({ page }) => {
+    await goToDashboard(page);
+    await expect(page.getByTestId('time_entry_description')).toBeEditable();
+    await page.getByTestId('time_entry_description').fill('Start on Enter');
+
+    await Promise.all([
+        newTimeEntryResponse(page, { description: 'Start on Enter' }),
+        page.getByTestId('time_entry_description').press('Enter'),
+    ]);
+    await assertThatTimerHasStarted(page);
+
+    await Promise.all([
+        stoppedTimeEntryResponse(page, { description: 'Start on Enter' }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerIsStopped(page);
+});
+
+test('test that timer started on dashboard is visible on time page', async ({ page }) => {
+    await goToDashboard(page);
+
+    // Start timer on dashboard
+    await expect(page.getByTestId('time_entry_description')).toBeEditable();
+    await page.getByTestId('time_entry_description').fill('Sync test');
+    await Promise.all([
+        newTimeEntryResponse(page, { description: 'Sync test' }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerHasStarted(page);
+
+    // Navigate to time page
+    await page.goto(PLAYWRIGHT_BASE_URL + '/time');
+
+    // Timer should still be running (the timer button should be red/active)
+    await expect(
+        page
+            .getByTestId('dashboard_timer')
+            .getByTestId('timer_button')
+            .and(page.locator(':visible'))
+    ).toHaveClass(/bg-red-400\/80/);
+
+    // Stop the timer
+    await Promise.all([
+        stoppedTimeEntryResponse(page, { description: 'Sync test' }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerIsStopped(page);
+});
+
+test('test that adding a project and tag before starting timer works', async ({ page }) => {
+    const newTagName = 'TimerTag ' + Math.floor(Math.random() * 10000);
+    await goToDashboard(page);
+
+    // Create and select a tag first
+    await page.getByTestId('tag_dropdown').click();
+    await page.getByText('Create new tag').click();
+    await page.getByPlaceholder('Tag Name').fill(newTagName);
+
+    const [tagCreateResponse] = await Promise.all([
+        newTagResponse(page, { name: newTagName }),
+        page.getByRole('button', { name: 'Create Tag' }).click(),
+    ]);
+    const tagId = (await tagCreateResponse.json()).data.id;
+
+    // Wait for tags query refetch (tag is auto-selected after creation)
+    await page.waitForResponse(
+        (response) => response.url().includes('/tags') && response.status() === 200
+    );
+
+    // Fill description and start
+    await page.getByTestId('time_entry_description').fill('Entry with tag');
+    await Promise.all([
+        newTimeEntryResponse(page, { description: 'Entry with tag', tags: [tagId] }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerHasStarted(page);
+
+    await Promise.all([
+        stoppedTimeEntryResponse(page, { description: 'Entry with tag', tags: [tagId] }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerIsStopped(page);
+});

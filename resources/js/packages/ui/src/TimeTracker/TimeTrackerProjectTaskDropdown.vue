@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ChevronRightIcon, ChevronDownIcon } from '@heroicons/vue/16/solid';
 import Dropdown from '@/packages/ui/src/Input/Dropdown.vue';
-import { computed, nextTick, ref, watch, watchEffect } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import ProjectDropdownItem from '@/packages/ui/src/Project/ProjectDropdownItem.vue';
 import type {
     CreateClientBody,
@@ -10,11 +10,11 @@ import type {
     Task,
     Client,
 } from '@/packages/api/src';
-import ProjectBadge from '@/packages/ui/src/Project/ProjectBadge.vue';
-import Badge from '@/packages/ui/src/Badge.vue';
+
 import { PlusIcon, PlusCircleIcon, MinusIcon, XMarkIcon } from '@heroicons/vue/16/solid';
 import ProjectCreateModal from '@/packages/ui/src/Project/ProjectCreateModal.vue';
 import { twMerge } from 'tailwind-merge';
+import { Button } from '@/packages/ui/src/Buttons';
 
 const task = defineModel<string | null>('task', {
     default: null,
@@ -33,6 +33,7 @@ const searchValue = ref('');
 
 watch(open, (isOpen) => {
     if (isOpen) {
+        updateFilteredResults();
         nextTick(() => {
             initializeHighlightedItem();
             searchInput.value?.focus({ preventScroll: true });
@@ -48,8 +49,6 @@ type ClientsWithProjectsWithTasks = ClientWithProjectsWithTasks[];
 
 const props = withDefaults(
     defineProps<{
-        showBadgeBorder?: boolean;
-        size?: 'base' | 'large' | 'xlarge';
         projects: Project[];
         tasks: Task[];
         clients: Client[];
@@ -61,12 +60,16 @@ const props = withDefaults(
         enableEstimatedTime: boolean;
         canCreateProject: boolean;
         class?: string;
+        variant?: 'input' | 'ghost' | 'outline';
+        align?: 'center' | 'end' | 'start';
+        size?: 'default' | 'xs' | 'sm' | 'lg' | 'icon';
     }>(),
     {
-        showBadgeBorder: true,
-        size: 'large',
         emptyPlaceholder: 'No Project',
         allowReset: false,
+        variant: 'ghost',
+        align: 'center',
+        size: 'sm',
     }
 );
 
@@ -92,7 +95,7 @@ function addProjectToFilterObject(
 
     if (projectClientIndex !== -1) {
         // client already exists in filter array
-        tempFilteredClients[projectClientIndex].projects.push({
+        tempFilteredClients[projectClientIndex]!.projects.push({
             ...project,
             expanded: expanded,
             tasks: filteredTasks,
@@ -119,7 +122,7 @@ function addProjectToFilterObject(
 
         if (noClientIndex !== -1) {
             // no client group already exists in filter array
-            tempFilteredClients[noClientIndex].projects.push({
+            tempFilteredClients[noClientIndex]!.projects.push({
                 ...project,
                 expanded: expanded,
                 tasks: filteredTasks,
@@ -146,7 +149,7 @@ function addProjectToFilterObject(
     }
 }
 
-watchEffect(() => {
+function updateFilteredResults() {
     const tempFilteredClients: ClientsWithProjectsWithTasks = [];
 
     if (searchValue.value.length === 0) {
@@ -241,6 +244,13 @@ watchEffect(() => {
     });
 
     filteredResults.value = tempFilteredClients;
+}
+
+// Recompute filtered results when search value changes while open
+watch(searchValue, () => {
+    if (open.value) {
+        updateFilteredResults();
+    }
 });
 
 async function addClientIfNoneExists() {
@@ -253,7 +263,7 @@ function isProjectSelected(project: Project) {
 
 function initializeHighlightedItem() {
     if (filteredProjects.value.length > 0) {
-        highlightedItemId.value = filteredProjects.value[0].id;
+        highlightedItemId.value = filteredProjects.value[0]!.id;
     }
 }
 
@@ -312,27 +322,27 @@ function moveHighlightUp() {
                 highlightedItemId.value = currentProjectWithTasks.id;
                 return;
             }
-            highlightedItemId.value = currentProjectWithTasks.tasks[taskIndex - 1].id;
+            highlightedItemId.value = currentProjectWithTasks.tasks[taskIndex - 1]!.id;
         }
     }
     if (currentHighlightedIndex === 0) {
         // selected project is the first project in the list
         // highlight the last project or the last task of the last project
-        const lastProject = filteredProjects.value[filteredProjects.value.length - 1];
+        const lastProject = filteredProjects.value[filteredProjects.value.length - 1]!;
         if (lastProject.tasks.length > 0 && lastProject.expanded) {
             // highlight last task of last project
-            highlightedItemId.value = lastProject.tasks[lastProject.tasks.length - 1].id;
+            highlightedItemId.value = lastProject.tasks[lastProject.tasks.length - 1]!.id;
         } else {
-            highlightedItemId.value = filteredProjects.value[filteredProjects.value.length - 1].id;
+            highlightedItemId.value = filteredProjects.value[filteredProjects.value.length - 1]!.id;
         }
     } else {
         // selected item is a project that is not the first project in the list
-        const previousProject = filteredProjects.value[currentHighlightedIndex - 1];
+        const previousProject = filteredProjects.value[currentHighlightedIndex - 1]!;
         if (previousProject.tasks.length > 0 && previousProject.expanded) {
             // highlight last task of previous project
-            highlightedItemId.value = previousProject.tasks[previousProject.tasks.length - 1].id;
+            highlightedItemId.value = previousProject.tasks[previousProject.tasks.length - 1]!.id;
         } else {
-            highlightedItemId.value = filteredProjects.value[currentHighlightedIndex - 1].id;
+            highlightedItemId.value = filteredProjects.value[currentHighlightedIndex - 1]!.id;
         }
     }
 }
@@ -361,33 +371,33 @@ function moveHighlightDown() {
                 const projectIndex = filteredProjects.value.indexOf(currentProjectWithTasks);
                 if (projectIndex === filteredProjects.value.length - 1) {
                     // highlight the first project if it was the last project
-                    highlightedItemId.value = filteredProjects.value[0].id;
+                    highlightedItemId.value = filteredProjects.value[0]!.id;
                 } else {
-                    highlightedItemId.value = filteredProjects.value[projectIndex + 1].id;
+                    highlightedItemId.value = filteredProjects.value[projectIndex + 1]!.id;
                 }
                 return;
             }
-            highlightedItemId.value = currentProjectWithTasks.tasks[taskIndex + 1].id;
+            highlightedItemId.value = currentProjectWithTasks.tasks[taskIndex + 1]!.id;
         }
     }
     if (currentHighlightedIndex === filteredProjects.value.length - 1) {
         // selected project is the last project in the list
         // highlight the first project or the last project of the last project
-        const lastProject = filteredProjects.value[filteredProjects.value.length - 1];
+        const lastProject = filteredProjects.value[filteredProjects.value.length - 1]!;
         if (lastProject.tasks.length > 0 && lastProject.expanded) {
             // highlight last task of last project
-            highlightedItemId.value = lastProject.tasks[0].id;
+            highlightedItemId.value = lastProject.tasks[0]!.id;
         } else {
-            highlightedItemId.value = filteredProjects.value[0].id;
+            highlightedItemId.value = filteredProjects.value[0]!.id;
         }
     } else {
         // selected item is a project that is not the last project in the list
-        const currentProjectWithTasks = filteredProjects.value[currentHighlightedIndex];
+        const currentProjectWithTasks = filteredProjects.value[currentHighlightedIndex]!;
         if (currentProjectWithTasks.tasks.length > 0 && currentProjectWithTasks.expanded) {
             // highlight last task of previous project
-            highlightedItemId.value = currentProjectWithTasks.tasks[0].id;
+            highlightedItemId.value = currentProjectWithTasks.tasks[0]!.id;
         } else {
-            highlightedItemId.value = filteredProjects.value[currentHighlightedIndex + 1].id;
+            highlightedItemId.value = filteredProjects.value[currentHighlightedIndex + 1]!.id;
         }
     }
 }
@@ -423,7 +433,7 @@ function expandProject() {
     if (currentHighlightedIndex === -1) {
         return;
     }
-    const currentProject = filteredProjects.value[currentHighlightedIndex];
+    const currentProject = filteredProjects.value[currentHighlightedIndex]!;
     currentProject.expanded = true;
 }
 
@@ -434,7 +444,7 @@ function collapseProject() {
     if (currentHighlightedIndex === -1) {
         return;
     }
-    const currentProject = filteredProjects.value[currentHighlightedIndex];
+    const currentProject = filteredProjects.value[currentHighlightedIndex]!;
     currentProject.expanded = false;
 }
 
@@ -486,56 +496,51 @@ function selectProject(projectId: string) {
     emit('changed', project.value, task.value);
 }
 
+function resetProject() {
+    project.value = null;
+    task.value = null;
+    emit('changed', project.value, task.value);
+}
+
 const showCreateProject = ref(false);
 </script>
 
 <template>
-    <div v-if="projects.length === 0 && canCreateProject">
-        <Badge
-            size="large"
-            tag="button"
-            class="cursor-pointer hover:bg-tertiary"
+    <template v-if="projects.length === 0 && canCreateProject">
+        <Button
+            :variant="props.variant"
+            :size="props.size"
+            :class="twMerge('w-full justify-start', props.class)"
             @click="showCreateProject = true">
-            <PlusIcon class="-ml-1 w-5"></PlusIcon>
-            <span>Add new project</span>
-        </Badge>
-    </div>
-    <Dropdown v-else v-model="open" :close-on-content-click="false" align="center">
+            <PlusIcon class="w-4" />
+            <span class="truncate">Add new project</span>
+        </Button>
+    </template>
+    <Dropdown v-else v-model="open" :close-on-content-click="false" :align="props.align">
         <template #trigger>
-            <ProjectBadge
-                ref="projectDropdownTrigger"
-                :color="selectedProjectColor"
-                :size="size"
-                :border="showBadgeBorder"
-                tag="button"
-                :name="selectedProjectName"
-                :class="
-                    twMerge(
-                        'focus:border-border-tertiary w-full focus:outline-0 focus:bg-card-background-separator min-w-0 relative',
-                        props.class
-                    )
-                ">
-                <div class="flex items-center lg:space-x-1 min-w-0">
-                    <span class="whitespace-nowrap text-xs lg:text-sm">
-                        {{ selectedProjectName }}
-                    </span>
-                    <ChevronRightIcon
-                        v-if="currentTask"
-                        class="w-4 lg:w-5 text-text-secondary shrink-0"></ChevronRightIcon>
-                    <div v-if="currentTask" class="min-w-0 shrink text-xs lg:text-sm truncate">
-                        {{ currentTask.name }}
-                    </div>
-                </div>
+            <div class="flex items-center gap-1">
+                <Button
+                    :variant="props.variant"
+                    :size="props.size"
+                    :class="twMerge('w-full justify-start overflow-hidden', props.class)">
+                    <div
+                        class="w-3 h-3 rounded-full shrink-0"
+                        :style="{ backgroundColor: selectedProjectColor }"></div>
+                    <span class="truncate shrink-[1] pr-1">{{ selectedProjectName }}</span>
+                    <template v-if="currentTask">
+                        <ChevronRightIcon class="w-4 h-4 text-text-tertiary shrink-0" />
+                        <span class="truncate shrink-[100]">{{ currentTask.name }}</span>
+                    </template>
+                </Button>
                 <button
-                    v-if="project !== null && allowReset"
-                    class="absolute right-0 top-0 h-full flex items-center pr-3 text-text-quaternary hover:text-text-secondary"
-                    @click.stop="
-                        project = null;
-                        task = null;
-                    ">
-                    <XMarkIcon class="w-5"></XMarkIcon>
+                    v-if="allowReset && project !== null"
+                    type="button"
+                    data-testid="project_reset_button"
+                    class="p-1 rounded hover:bg-quaternary text-text-tertiary hover:text-text-primary"
+                    @click.stop="resetProject">
+                    <XMarkIcon class="w-4 h-4" />
                 </button>
-            </ProjectBadge>
+            </div>
         </template>
         <template #content>
             <UseFocusTrap v-if="open" :options="{ immediate: true, allowOutsideClick: true }">
@@ -543,7 +548,7 @@ const showCreateProject = ref(false);
                     ref="searchInput"
                     :value="searchValue"
                     data-testid="client_dropdown_search"
-                    class="bg-card-background border-0 placeholder-muted text-sm text-text-primary py-2.5 focus:ring-0 border-b border-card-background-separator focus:border-card-background-separator w-full"
+                    class="bg-card-background border-0 placeholder-text-tertiary text-sm text-text-primary py-2.5 focus:ring-0 border-b border-card-background-separator focus:border-card-background-separator w-full"
                     placeholder="Search for a project or task..."
                     @input="updateSearchValue"
                     @keydown.enter.prevent="addClientIfNoneExists"
@@ -651,6 +656,7 @@ const showCreateProject = ref(false);
         </template>
     </Dropdown>
     <ProjectCreateModal
+        v-if="showCreateProject"
         v-model:show="showCreateProject"
         :create-client
         :enable-estimated-time="enableEstimatedTime"

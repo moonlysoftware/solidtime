@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { Member, Organization } from '@/packages/api/src';
 import { api } from '@/packages/api/src';
-import { CheckCircleIcon, UserCircleIcon } from '@heroicons/vue/20/solid';
+import { CheckCircleIcon, UserCircleIcon } from '@heroicons/vue/24/outline';
 import MemberMoreOptionsDropdown from '@/Components/Common/Member/MemberMoreOptionsDropdown.vue';
 import TableRow from '@/Components/TableRow.vue';
 import SecondaryButton from '@/packages/ui/src/Buttons/SecondaryButton.vue';
@@ -15,14 +15,12 @@ import MemberMakePlaceholderModal from '@/Components/Common/Member/MemberMakePla
 import MemberDeleteModal from '@/Components/Common/Member/MemberDeleteModal.vue';
 import { capitalizeFirstLetter } from '../../../utils/format';
 import { formatCents } from '../../../packages/ui/src/utils/money';
-import { useMembersStore } from '@/utils/useMembers';
 
 const props = defineProps<{
     member: Member;
 }>();
 
 const organization = inject<ComputedRef<Organization>>('organization');
-const memberStore = useMembersStore();
 
 const showEditMemberModal = ref(false);
 const showMergeMemberModal = ref(false);
@@ -31,7 +29,6 @@ const showDeleteMemberModal = ref(false);
 
 function removeMember() {
     showDeleteMemberModal.value = true;
-    memberStore.fetchMembers();
 }
 
 async function invitePlaceholder(id: string) {
@@ -85,11 +82,15 @@ const userHasValidMailAddress = computed(() => {
             }}
         </div>
         <div
-            class="whitespace-nowrap px-3 py-4 text-sm text-text-secondary flex space-x-1 items-center font-medium">
-            <CheckCircleIcon v-if="member.is_placeholder === false" class="w-5"></CheckCircleIcon>
-            <span v-if="member.is_placeholder === false">Active</span>
-            <UserCircleIcon v-if="member.is_placeholder === true" class="w-5"></UserCircleIcon>
-            <span v-if="member.is_placeholder === true">Inactive</span>
+            class="whitespace-nowrap px-3 py-4 text-sm text-text-secondary flex space-x-1.5 items-center font-medium">
+            <template v-if="member.is_placeholder === false">
+                <CheckCircleIcon class="w-4 text-icon-default"></CheckCircleIcon>
+                <span>Active</span>
+            </template>
+            <template v-else>
+                <UserCircleIcon class="w-4 text-icon-default"></UserCircleIcon>
+                <span>Inactive</span>
+            </template>
         </div>
         <div
             class="relative whitespace-nowrap flex items-center pl-3 text-right text-sm font-medium sm:pr-0 pr-4 sm:pr-6 lg:pr-8 3xl:pr-12">

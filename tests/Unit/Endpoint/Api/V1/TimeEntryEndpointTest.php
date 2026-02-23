@@ -20,6 +20,7 @@ use App\Models\Tag;
 use App\Models\Task;
 use App\Models\TimeEntry;
 use App\Models\User;
+use App\Service\TimeEntryFilter;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Log;
@@ -402,6 +403,52 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
             ->create([
                 'start' => Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:08'),
                 'end' => Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:01'),
+            ]);
+        $timeEntry2 = TimeEntry::factory()->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:07'),
+                'end' => null,
+            ]);
+        $this->actAsOrganizationWithSubscription();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index', [
+            $data->organization->getKey(),
+            'member_id' => $data->member->getKey(),
+            'rounding_type' => TimeEntryRoundingType::Up,
+            'rounding_minutes' => 6,
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+        $response->assertJson(fn (AssertableJson $json) => $json
+            ->has('data')
+            ->has('meta')
+            ->where('meta.total', 2)
+            ->count('data', 2)
+            ->where('data.0.id', $timeEntry1->getKey())
+            ->where('data.0.start', '2020-01-01T00:00:00Z')
+            ->where('data.0.end', '2020-01-01T00:06:00Z')
+            ->where('data.1.id', $timeEntry2->getKey())
+            ->where('data.1.start', '2020-01-01T00:00:00Z')
+            ->where('data.1.end', '2020-01-01T00:18:00Z')
+        );
+    }
+
+    public function test_index_endpoint_can_round_up_but_does_not_round_up_if_already_on_border(): void
+    {
+        // Arrange
+        $this->travelTo(Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:15:04'));
+        $data = $this->createUserWithPermission([
+            'time-entries:view:own',
+        ]);
+        $timeEntry1 = TimeEntry::factory()->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:00:08'),
+                'end' => Carbon::createFromFormat('Y-m-d H:i:s', '2020-01-01 00:06:00'),
             ]);
         $timeEntry2 = TimeEntry::factory()->forOrganization($data->organization)
             ->forMember($data->member)
@@ -1512,6 +1559,84 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         $this->assertResponseCode($response, 200);
     }
 
+    public function test_index_export_endpoint_with_client_ids_filter_returns_filtered_entries(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $clientA = Client::factory()->forOrganization($data->organization)->create();
+        $clientB = Client::factory()->forOrganization($data->organization)->create();
+        $projectA = Project::factory()->forOrganization($data->organization)->forClient($clientA)->create();
+        $projectB = Project::factory()->forOrganization($data->organization)->forClient($clientB)->create();
+        $timeEntry1 = TimeEntry::factory()->forOrganization($data->organization)->forProject($projectA)->forMember($data->member)->startWithDuration(Carbon::now(), 100)->create();
+        $timeEntry2 = TimeEntry::factory()->forOrganization($data->organization)->forProject($projectB)->forMember($data->member)->startWithDuration(Carbon::now(), 100)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index-export', [
+            $data->organization->getKey(),
+            'format' => ExportFormat::CSV,
+            'client_ids' => [$clientA->getKey()],
+            'start' => Carbon::now()->startOfYear()->toIso8601ZuluString(),
+            'end' => Carbon::now()->endOfYear()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+    }
+
+    public function test_index_export_endpoint_with_none_client_ids_filter_succeeds(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $client = Client::factory()->forOrganization($data->organization)->create();
+        $project = Project::factory()->forOrganization($data->organization)->forClient($client)->create();
+        $timeEntry1 = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->startWithDuration(Carbon::now(), 100)->create();
+        $timeEntry2 = TimeEntry::factory()->forOrganization($data->organization)->forProject($project)->forMember($data->member)->startWithDuration(Carbon::now(), 100)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index-export', [
+            $data->organization->getKey(),
+            'format' => ExportFormat::CSV,
+            'client_ids' => [TimeEntryFilter::NONE_VALUE],
+            'start' => Carbon::now()->startOfYear()->toIso8601ZuluString(),
+            'end' => Carbon::now()->endOfYear()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+    }
+
+    public function test_index_export_endpoint_with_client_ids_of_other_organization_fails_validation(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $otherData = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $otherClient = Client::factory()->forOrganization($otherData->organization)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index-export', [
+            $data->organization->getKey(),
+            'format' => ExportFormat::CSV,
+            'client_ids' => [$otherClient->getKey()],
+            'start' => Carbon::now()->startOfYear()->toIso8601ZuluString(),
+            'end' => Carbon::now()->endOfYear()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrorFor('client_ids.0');
+    }
+
     public function test_aggregate_endpoint_fails_if_user_has_only_access_to_own_time_entries_but_does_not_filter_for_this(): void
     {
         // Arrange
@@ -1922,6 +2047,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $activeTimeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->active()->create();
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->withTags($data->organization)->make();
@@ -1949,6 +2075,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->make();
         $timeEntryFake2 = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->make();
@@ -1978,6 +2105,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->make();
         $timeEntryFake2 = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->make();
@@ -2007,6 +2135,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $timeEntryFake = TimeEntry::factory()->withTask($data->organization)->forOrganization($data->organization)->make();
         Passport::actingAs($data->user);
@@ -2037,6 +2166,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $timeEntryFake = TimeEntry::factory()->withTask($data->organization)->forOrganization($data->organization)->make();
         Passport::actingAs($data->user);
@@ -2053,11 +2183,47 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         $response->assertStatus(422);
     }
 
+    public function test_store_endpoint_fails_if_employee_tries_to_create_time_entry_for_private_project_without_access(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:create:own',
+        ]);
+
+        // Create a private project that the employee is not a member of
+        $privateProject = Project::factory()->forOrganization($data->organization)->create([
+            'is_public' => false,
+        ]);
+
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.time-entries.store', [$data->organization->getKey()]), [
+            'description' => 'Test time entry',
+            'billable' => false,
+            'start' => now()->toIso8601ZuluString(),
+            'end' => now()->addHour()->toIso8601ZuluString(),
+            'member_id' => $data->member->getKey(),
+            'project_id' => $privateProject->getKey(),
+        ]);
+
+        // Assert
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['project_id']);
+
+        // Verify the time entry was NOT created in the database
+        $this->assertDatabaseMissing(TimeEntry::class, [
+            'project_id' => $privateProject->getKey(),
+            'member_id' => $data->member->getKey(),
+        ]);
+    }
+
     public function test_store_endpoints_sets_billable_rate(): void
     {
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $timeEntryFake = TimeEntry::factory()->withTask($data->organization)->forOrganization($data->organization)->make();
         $project = Project::factory()->forOrganization($data->organization)->billable()->create();
@@ -2088,6 +2254,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->make();
         Passport::actingAs($data->user);
@@ -2113,6 +2280,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $client = Client::factory()->forOrganization($data->organization)->create();
         $project = Project::factory()->forOrganization($data->organization)->forClient($client)->create();
@@ -2143,6 +2311,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $otherUser = User::factory()->create();
         $otherMember = Member::factory()->forOrganization($data->organization)->forUser($otherUser)->role(Role::Employee)->create();
@@ -2202,6 +2371,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
@@ -2236,6 +2406,39 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         });
     }
 
+    public function test_update_endpoint_fails_if_employee_tries_to_update_time_entry_to_private_project_without_access(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:update:own',
+        ]);
+
+        // Create a time entry for the employee
+        $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
+
+        // Create a private project that the employee is not a member of
+        $privateProject = Project::factory()->forOrganization($data->organization)->create([
+            'is_public' => false,
+        ]);
+
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->putJson(route('api.v1.time-entries.update', [$data->organization->getKey(), $timeEntry->getKey()]), [
+            'project_id' => $privateProject->getKey(),
+        ]);
+
+        // Assert
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['project_id']);
+
+        // Verify the time entry was NOT updated in the database
+        $this->assertDatabaseMissing(TimeEntry::class, [
+            'id' => $timeEntry->getKey(),
+            'project_id' => $privateProject->getKey(),
+        ]);
+    }
+
     public function test_update_endpoint_fails_if_user_has_no_permission_to_update_own_time_entries(): void
     {
         // Arrange
@@ -2264,9 +2467,11 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $otherUser = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($otherUser->organization)->forMember($otherUser->member)->create();
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->make();
@@ -2290,6 +2495,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $user = User::factory()->create();
         $member = Member::factory()->forOrganization($data->organization)->forUser($user)->role(Role::Employee)->create();
@@ -2315,6 +2521,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->make();
@@ -2344,6 +2551,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->withTask($data->organization)->make();
@@ -2373,6 +2581,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
         $timeEntryFake = TimeEntry::factory()->withTags($data->organization)->forOrganization($data->organization)->make();
@@ -2401,6 +2610,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
         $timeEntryFake = TimeEntry::factory()->withTags($data->organization)->forOrganization($data->organization)->make();
@@ -2432,6 +2642,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
         $timeEntryFake = TimeEntry::factory()->withTags($data->organization)->forOrganization($data->organization)->make();
@@ -2459,6 +2670,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
         $timeEntryFake = TimeEntry::factory()->forOrganization($data->organization)->make();
@@ -2576,6 +2788,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $project = Project::factory()->forOrganization($data->organization)->create();
         $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
@@ -2610,6 +2823,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $oldProject = Project::factory()->forOrganization($data->organization)->create();
         $oldTask = Task::factory()->forOrganization($data->organization)->forProject($oldProject)->create();
@@ -3029,11 +3243,53 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         $response->assertForbidden();
     }
 
+    public function test_update_multiple_endpoint_fails_if_employee_tries_to_update_time_entries_to_private_project_without_access(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:update:own',
+        ]);
+
+        // Create time entries for the employee
+        $timeEntry1 = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
+        $timeEntry2 = TimeEntry::factory()->forOrganization($data->organization)->forMember($data->member)->create();
+
+        // Create a private project that the employee is not a member of
+        $privateProject = Project::factory()->forOrganization($data->organization)->create([
+            'is_public' => false,
+        ]);
+
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->patchJson(route('api.v1.time-entries.update-multiple', [$data->organization->getKey()]), [
+            'ids' => [$timeEntry1->getKey(), $timeEntry2->getKey()],
+            'changes' => [
+                'project_id' => $privateProject->getKey(),
+            ],
+        ]);
+
+        // Assert
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['changes.project_id']);
+
+        // Verify the time entries were NOT updated in the database
+        $this->assertDatabaseMissing(TimeEntry::class, [
+            'id' => $timeEntry1->getKey(),
+            'project_id' => $privateProject->getKey(),
+        ]);
+        $this->assertDatabaseMissing(TimeEntry::class, [
+            'id' => $timeEntry2->getKey(),
+            'project_id' => $privateProject->getKey(),
+        ]);
+    }
+
     public function test_update_multiple_remove_task_from_time_entries_only_if_project_is_set_to_a_new_value_without_setting_a_new_task(): void
     {
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $project1 = Project::factory()->forOrganization($data->organization)->create();
         $project2 = Project::factory()->forOrganization($data->organization)->create();
@@ -3081,6 +3337,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $otherData = $this->createUserWithPermission();
         $otherUser = User::factory()->create();
@@ -3138,6 +3395,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $otherData = $this->createUserWithPermission();
         $otherUser = User::factory()->create();
@@ -3217,6 +3475,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $timeEntry1 = TimeEntry::factory()->forMember($data->member)->create([
             'description' => '',
@@ -3398,6 +3657,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3432,6 +3692,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3466,6 +3727,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3500,6 +3762,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3534,6 +3797,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3570,6 +3834,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         $this->travelTo($now);
         $data = $this->createUserWithPermission([
             'time-entries:create:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3597,6 +3862,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $data->organization->prevent_overlapping_time_entries = true;
         $data->organization->save();
@@ -3820,6 +4086,7 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
         // Arrange
         $data = $this->createUserWithPermission([
             'time-entries:update:own',
+            'projects:view:all',
         ]);
         $otherUser = User::factory()->create();
         $otherMember = Member::factory()->forOrganization($data->organization)->forUser($otherUser)->role(Role::Employee)->create();
@@ -3844,5 +4111,203 @@ class TimeEntryEndpointTest extends ApiEndpointTestAbstract
             'id' => $ownTimeEntry->getKey(),
             'member_id' => $ownTimeEntry->member_id,
         ]);
+    }
+
+    public function test_index_endpoint_with_none_project_filter_returns_entries_without_project(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $project = Project::factory()->forOrganization($data->organization)->create();
+        $timeEntryWithProject = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forProject($project)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::now()->subHour(),
+            ]);
+        $timeEntryWithoutProject = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'project_id' => null,
+                'start' => Carbon::now()->subHour(),
+            ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index', [
+            $data->organization->getKey(),
+            'project_ids' => [TimeEntryFilter::NONE_VALUE],
+            'start' => Carbon::now()->subDay()->toIso8601ZuluString(),
+            'end' => Carbon::now()->addDay()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.id', $timeEntryWithoutProject->getKey());
+    }
+
+    public function test_index_endpoint_with_none_and_id_project_filter_returns_both(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $project = Project::factory()->forOrganization($data->organization)->create();
+        $otherProject = Project::factory()->forOrganization($data->organization)->create();
+        $timeEntryWithProject = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forProject($project)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::now()->subHour(),
+            ]);
+        $timeEntryWithoutProject = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'project_id' => null,
+                'start' => Carbon::now()->subHour(),
+            ]);
+        $timeEntryWithOtherProject = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forProject($otherProject)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::now()->subHour(),
+            ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index', [
+            $data->organization->getKey(),
+            'project_ids' => [TimeEntryFilter::NONE_VALUE, $project->getKey()],
+            'start' => Carbon::now()->subDay()->toIso8601ZuluString(),
+            'end' => Carbon::now()->addDay()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+        $response->assertJsonCount(2, 'data');
+        $ids = collect($response->json('data'))->pluck('id')->toArray();
+        $this->assertContains($timeEntryWithProject->getKey(), $ids);
+        $this->assertContains($timeEntryWithoutProject->getKey(), $ids);
+        $this->assertNotContains($timeEntryWithOtherProject->getKey(), $ids);
+    }
+
+    public function test_index_endpoint_with_none_task_filter_returns_entries_without_task(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $project = Project::factory()->forOrganization($data->organization)->create();
+        $task = Task::factory()->forOrganization($data->organization)->forProject($project)->create();
+        $timeEntryWithTask = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forProject($project)
+            ->forTask($task)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::now()->subHour(),
+            ]);
+        $timeEntryWithoutTask = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'task_id' => null,
+                'start' => Carbon::now()->subHour(),
+            ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index', [
+            $data->organization->getKey(),
+            'task_ids' => [TimeEntryFilter::NONE_VALUE],
+            'start' => Carbon::now()->subDay()->toIso8601ZuluString(),
+            'end' => Carbon::now()->addDay()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.id', $timeEntryWithoutTask->getKey());
+    }
+
+    public function test_index_endpoint_with_none_client_filter_returns_entries_without_client(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $client = Client::factory()->forOrganization($data->organization)->create();
+        $timeEntryWithClient = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'client_id' => $client->getKey(),
+                'start' => Carbon::now()->subHour(),
+            ]);
+        $timeEntryWithoutClient = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'client_id' => null,
+                'start' => Carbon::now()->subHour(),
+            ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index', [
+            $data->organization->getKey(),
+            'client_ids' => [TimeEntryFilter::NONE_VALUE],
+            'start' => Carbon::now()->subDay()->toIso8601ZuluString(),
+            'end' => Carbon::now()->addDay()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.id', $timeEntryWithoutClient->getKey());
+    }
+
+    public function test_index_endpoint_with_none_tag_filter_returns_entries_without_tags(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'time-entries:view:all',
+        ]);
+        $tag = Tag::factory()->forOrganization($data->organization)->create();
+        $timeEntryWithTag = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::now()->subHour(),
+                'tags' => [$tag->getKey()],
+            ]);
+        $timeEntryWithoutTag = TimeEntry::factory()
+            ->forOrganization($data->organization)
+            ->forMember($data->member)
+            ->create([
+                'start' => Carbon::now()->subHour(),
+                'tags' => [],
+            ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->getJson(route('api.v1.time-entries.index', [
+            $data->organization->getKey(),
+            'tag_ids' => [TimeEntryFilter::NONE_VALUE],
+            'start' => Carbon::now()->subDay()->toIso8601ZuluString(),
+            'end' => Carbon::now()->addDay()->toIso8601ZuluString(),
+        ]));
+
+        // Assert
+        $this->assertResponseCode($response, 200);
+        $response->assertJsonCount(1, 'data');
+        $response->assertJsonPath('data.0.id', $timeEntryWithoutTag->getKey());
     }
 }

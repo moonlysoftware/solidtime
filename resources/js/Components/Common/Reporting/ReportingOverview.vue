@@ -1,7 +1,11 @@
 <script setup lang="ts">
-import { ChartBarIcon, CheckCircleIcon, TagIcon, UserGroupIcon } from '@heroicons/vue/20/solid';
-import { FolderIcon } from '@heroicons/vue/16/solid';
-import BillableIcon from '@/packages/ui/src/Icons/BillableIcon.vue';
+import {
+    ChartBarIcon,
+    ArrowDownTrayIcon,
+    EllipsisVerticalIcon,
+    LockClosedIcon,
+} from '@heroicons/vue/20/solid';
+import { SaveIcon } from 'lucide-vue-next';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import {
     formatHumanReadableDuration,
@@ -10,43 +14,42 @@ import {
 } from '@/packages/ui/src/utils/time';
 import { formatCents } from '@/packages/ui/src/utils/money';
 import ReportingTabNavbar from '@/Components/Common/Reporting/ReportingTabNavbar.vue';
-import ReportingExportButton from '@/Components/Common/Reporting/ReportingExportButton.vue';
-import ReportingRoundingControls from '@/Components/Common/Reporting/ReportingRoundingControls.vue';
-import TaskMultiselectDropdown from '@/Components/Common/Task/TaskMultiselectDropdown.vue';
-import ClientMultiselectDropdown from '@/Components/Common/Client/ClientMultiselectDropdown.vue';
 import ReportingRow from '@/Components/Common/Reporting/ReportingRow.vue';
-import MemberMultiselectDropdown from '@/Components/Common/Member/MemberMultiselectDropdown.vue';
-import ReportingFilterBadge from '@/Components/Common/Reporting/ReportingFilterBadge.vue';
 import PageTitle from '@/Components/Common/PageTitle.vue';
-import ProjectMultiselectDropdown from '@/Components/Common/Project/ProjectMultiselectDropdown.vue';
 import ReportingChart from '@/Components/Common/Reporting/ReportingChart.vue';
-import SelectDropdown from '../../../packages/ui/src/Input/SelectDropdown.vue';
 import ReportingGroupBySelect from '@/Components/Common/Reporting/ReportingGroupBySelect.vue';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
-import DateRangePicker from '@/packages/ui/src/Input/DateRangePicker.vue';
 import ReportingExportModal from '@/Components/Common/Reporting/ReportingExportModal.vue';
-import ReportSaveButton from '@/Components/Common/Report/ReportSaveButton.vue';
-import TagDropdown from '@/packages/ui/src/Tag/TagDropdown.vue';
 import ReportingPieChart from '@/Components/Common/Reporting/ReportingPieChart.vue';
-
-import { computed, type ComputedRef, inject, onMounted, ref, watch } from 'vue';
-import { type GroupingOption, useReportingStore } from '@/utils/useReporting';
-import { storeToRefs } from 'pinia';
+import ReportingFilterBar from '@/Components/Common/Reporting/ReportingFilterBar.vue';
+import { SecondaryButton } from '@/packages/ui/src';
 import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger,
+} from '@/Components/ui/dropdown-menu';
+import ReportCreateModal from '@/Components/Common/Report/ReportCreateModal.vue';
+import UpgradeModal from '@/Components/Common/UpgradeModal.vue';
+import { canCreateReports } from '@/utils/permissions';
+import { isAllowedToPerformPremiumAction } from '@/utils/billing';
+import { computed, type ComputedRef, inject, ref, watch } from 'vue';
+import { type GroupingOption, useReportingStore } from '@/utils/useReporting';
+import {
+    type AggregatedTimeEntries,
     type AggregatedTimeEntriesQueryParams,
     api,
     type CreateReportBodyProperties,
     type Organization,
 } from '@/packages/api/src';
 import { getCurrentMembershipId, getCurrentOrganizationId, getCurrentRole } from '@/utils/useUser';
-import { useTagsStore } from '@/utils/useTags';
 import { useSessionStorage, useStorage } from '@vueuse/core';
 import { useNotificationsStore } from '@/utils/notification';
 import type { ExportFormat } from '@/types/reporting';
 import { getRandomColorWithSeed } from '@/packages/ui/src/utils/color';
-import { useProjectsStore } from '@/utils/useProjects';
+import { useProjectsQuery } from '@/utils/useProjectsQuery';
+import { useAggregatedTimeEntriesQuery } from '@/utils/useAggregatedTimeEntriesQuery';
 
-// TimeEntryRoundingType is now defined in ReportingRoundingControls component
 type TimeEntryRoundingType = 'up' | 'down' | 'nearest';
 
 const { handleApiRequestNotifications } = useNotificationsStore();
@@ -74,71 +77,32 @@ const group = useStorage<GroupingOption>('reporting-group', 'project');
 const subGroup = useStorage<GroupingOption>('reporting-sub-group', 'task');
 
 const reportingStore = useReportingStore();
-
-const { aggregatedGraphTimeEntries, aggregatedTableTimeEntries } = storeToRefs(reportingStore);
-
-const { groupByOptions } = reportingStore;
+const { groupByOptions, getNameForReportingRowEntry, emptyPlaceholder } = reportingStore;
 
 const organization = inject<ComputedRef<Organization>>('organization');
 
-// Watch rounding enabled state to trigger updates
-watch(roundingEnabled, () => {
-    updateReporting();
+const showBillableRate = computed(() => {
+    return !!(
+        getCurrentRole() !== 'employee' || organization?.value?.employees_can_see_billable_rates
+    );
 });
 
-function getFilterAttributes(): AggregatedTimeEntriesQueryParams {
-    let params: AggregatedTimeEntriesQueryParams = {
-        start: getLocalizedDayJs(startDate.value).startOf('day').utc().format(),
-        end: getLocalizedDayJs(endDate.value).endOf('day').utc().format(),
-    };
-    params = {
-        ...params,
-        member_ids: selectedMembers.value.length > 0 ? selectedMembers.value : undefined,
-        project_ids: selectedProjects.value.length > 0 ? selectedProjects.value : undefined,
-        task_ids: selectedTasks.value.length > 0 ? selectedTasks.value : undefined,
-        client_ids: selectedClients.value.length > 0 ? selectedClients.value : undefined,
-        tag_ids: selectedTags.value.length > 0 ? selectedTags.value : undefined,
-        billable: billable.value !== null ? billable.value : undefined,
-        member_id: getCurrentRole() === 'employee' ? getCurrentMembershipId() : undefined,
-        rounding_type: roundingEnabled.value ? roundingType.value : undefined,
-        rounding_minutes: roundingEnabled.value ? roundingMinutes.value : undefined,
-    };
-    return params;
-}
-
-function updateGraphReporting() {
-    const params = getFilterAttributes();
-    if (getCurrentRole() === 'employee') {
-        params.member_id = getCurrentMembershipId();
-    }
-    params.fill_gaps_in_time_groups = 'true';
-    params.group = getOptimalGroupingOption(startDate.value, endDate.value);
-    useReportingStore().fetchGraphReporting(params);
-}
-
-function updateTableReporting() {
-    const params = getFilterAttributes();
-    if (group.value === subGroup.value) {
-        const fallbackOption = groupByOptions.find((el) => el.value !== group.value);
-        if (fallbackOption?.value) {
-            subGroup.value = fallbackOption.value;
+// Ensure sub-group falls back when it collides with group
+watch(
+    group,
+    () => {
+        if (group.value === subGroup.value) {
+            const fallbackOption = groupByOptions.find((el) => el.value !== group.value);
+            if (fallbackOption?.value) {
+                subGroup.value = fallbackOption.value;
+            }
         }
-    }
-    if (getCurrentRole() === 'employee') {
-        params.member_id = getCurrentMembershipId();
-    }
-    params.group = group.value;
-    params.sub_group = subGroup.value;
-    useReportingStore().fetchTableReporting(params);
-}
+    },
+    { immediate: true }
+);
 
-function updateReporting() {
-    updateGraphReporting();
-    updateTableReporting();
-}
-
-function getOptimalGroupingOption(startDate: string, endDate: string): 'day' | 'week' | 'month' {
-    const diffInDays = getDayJsInstance()(endDate).diff(getDayJsInstance()(startDate), 'd');
+function getOptimalGroupingOption(start: string, end: string): 'day' | 'week' | 'month' {
+    const diffInDays = getDayJsInstance()(end).diff(getDayJsInstance()(start), 'd');
 
     if (diffInDays <= 31) {
         return 'day';
@@ -149,20 +113,62 @@ function getOptimalGroupingOption(startDate: string, endDate: string): 'day' | '
     }
 }
 
-onMounted(() => {
-    updateGraphReporting();
-    updateTableReporting();
+const filterParams = computed<AggregatedTimeEntriesQueryParams>(() => {
+    return {
+        start: getLocalizedDayJs(startDate.value).startOf('day').utc().format(),
+        end: getLocalizedDayJs(endDate.value).endOf('day').utc().format(),
+        member_ids: selectedMembers.value.length > 0 ? selectedMembers.value : undefined,
+        project_ids: selectedProjects.value.length > 0 ? selectedProjects.value : undefined,
+        task_ids: selectedTasks.value.length > 0 ? selectedTasks.value : undefined,
+        client_ids: selectedClients.value.length > 0 ? selectedClients.value : undefined,
+        tag_ids: selectedTags.value.length > 0 ? selectedTags.value : undefined,
+        billable: billable.value !== null ? billable.value : undefined,
+        member_id: getCurrentRole() === 'employee' ? getCurrentMembershipId() : undefined,
+        rounding_type: roundingEnabled.value ? roundingType.value : undefined,
+        rounding_minutes: roundingEnabled.value ? roundingMinutes.value : undefined,
+    };
 });
 
-const { tags } = storeToRefs(useTagsStore());
+const graphQueryParams = computed<AggregatedTimeEntriesQueryParams>(() => {
+    return {
+        ...filterParams.value,
+        fill_gaps_in_time_groups: 'true',
+        group: getOptimalGroupingOption(startDate.value, endDate.value),
+    };
+});
 
-async function createTag(tag: string) {
-    return await useTagsStore().createTag(tag);
-}
+const tableQueryParams = computed<AggregatedTimeEntriesQueryParams>(() => {
+    return {
+        ...filterParams.value,
+        group: group.value,
+        sub_group: subGroup.value,
+    };
+});
+
+const { data: graphResponse } = useAggregatedTimeEntriesQuery('graph', graphQueryParams);
+const { data: tableResponse } = useAggregatedTimeEntriesQuery('table', tableQueryParams);
+
+const aggregatedGraphTimeEntries = computed<AggregatedTimeEntries | undefined>(() => {
+    return graphResponse.value?.data as AggregatedTimeEntries | undefined;
+});
+
+const aggregatedTableTimeEntries = computed<AggregatedTimeEntries | undefined>(() => {
+    return tableResponse.value?.data as AggregatedTimeEntries | undefined;
+});
 
 const reportProperties = computed(() => {
+    const { billable: billableFilter, ...rest } = filterParams.value;
+
+    let billableValue: boolean | null = null;
+    if (billableFilter === 'true') {
+        billableValue = true;
+    } else if (billableFilter === 'false') {
+        billableValue = false;
+    }
+
     return {
-        ...getFilterAttributes(),
+        ...rest,
+        billable: billableValue,
         group: group.value,
         sub_group: subGroup.value,
         history_group: getOptimalGroupingOption(startDate.value, endDate.value),
@@ -179,7 +185,7 @@ async function downloadExport(format: ExportFormat) {
                         organization: organizationId,
                     },
                     queries: {
-                        ...getFilterAttributes(),
+                        ...filterParams.value,
                         group: group.value,
                         sub_group: subGroup.value,
                         history_group: getOptimalGroupingOption(startDate.value, endDate.value),
@@ -197,25 +203,44 @@ async function downloadExport(format: ExportFormat) {
     }
 }
 
-const { getNameForReportingRowEntry, emptyPlaceholder } = useReportingStore();
-
-const projectsStore = useProjectsStore();
-const { projects } = storeToRefs(projectsStore);
+const { projects } = useProjectsQuery();
 const showExportModal = ref(false);
 const exportUrl = ref<string | null>(null);
+const showCreateReportModal = ref(false);
+const showPremiumModal = ref(false);
+const exportLoading = ref(false);
+
+function triggerExport(format: ExportFormat) {
+    if (format === 'pdf' && !isAllowedToPerformPremiumAction()) {
+        showPremiumModal.value = true;
+        return;
+    }
+    exportLoading.value = true;
+    downloadExport(format).finally(() => {
+        exportLoading.value = false;
+    });
+}
+
+function onSaveReportClick() {
+    if (isAllowedToPerformPremiumAction()) {
+        showCreateReportModal.value = true;
+    } else {
+        showPremiumModal.value = true;
+    }
+}
 
 const groupedPieChartData = computed(() => {
     return (
         aggregatedTableTimeEntries.value?.grouped_data?.map((entry) => {
             const name = getNameForReportingRowEntry(
                 entry.key,
-                aggregatedTableTimeEntries.value?.grouped_type
+                aggregatedTableTimeEntries.value?.grouped_type ?? null
             );
             let color = getRandomColorWithSeed(entry.key ?? 'none');
             if (
                 name &&
                 aggregatedTableTimeEntries.value?.grouped_type &&
-                emptyPlaceholder[aggregatedTableTimeEntries.value?.grouped_type] === name
+                emptyPlaceholder[aggregatedTableTimeEntries.value.grouped_type] === name
             ) {
                 color = '#CCCCCC';
             } else if (aggregatedTableTimeEntries.value?.grouped_type === 'project') {
@@ -227,7 +252,7 @@ const groupedPieChartData = computed(() => {
                 name:
                     getNameForReportingRowEntry(
                         entry.key,
-                        aggregatedTableTimeEntries.value?.grouped_type
+                        aggregatedTableTimeEntries.value?.grouped_type ?? null
                     ) ?? '',
                 color: color,
             };
@@ -242,7 +267,7 @@ const tableData = computed(() => {
             cost: entry.cost,
             description: getNameForReportingRowEntry(
                 entry.key,
-                aggregatedTableTimeEntries.value?.grouped_type
+                aggregatedTableTimeEntries.value?.grouped_type ?? null
             ),
             grouped_data:
                 entry.grouped_data?.map((el) => {
@@ -261,140 +286,125 @@ const tableData = computed(() => {
     <ReportingExportModal
         v-model:show="showExportModal"
         :export-url="exportUrl"></ReportingExportModal>
+    <ReportCreateModal
+        v-model:show="showCreateReportModal"
+        :properties="reportProperties"></ReportCreateModal>
+    <UpgradeModal v-model:show="showPremiumModal">
+        This feature is only available in solidtime Professional.
+    </UpgradeModal>
     <MainContainer
-        class="py-3 sm:py-5 border-b border-default-background-separator flex justify-between items-center">
+        class="h-14 sm:h-16 border-b border-default-background-separator flex flex-wrap gap-y-3 justify-between items-center">
         <div class="flex items-center space-x-3 sm:space-x-6">
             <PageTitle :icon="ChartBarIcon" title="Reporting"></PageTitle>
-            <ReportingTabNavbar active="reporting"></ReportingTabNavbar>
+            <ReportingTabNavbar active="reporting" class="hidden sm:flex"></ReportingTabNavbar>
         </div>
-        <div class="flex space-x-2">
-            <ReportingExportButton :download="downloadExport"></ReportingExportButton>
-            <ReportSaveButton :report-properties="reportProperties"></ReportSaveButton>
+        <div class="hidden sm:flex space-x-2">
+            <DropdownMenu>
+                <DropdownMenuTrigger as-child>
+                    <SecondaryButton :icon="ArrowDownTrayIcon" :loading="exportLoading">
+                        Export
+                    </SecondaryButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                    <DropdownMenuItem @click="triggerExport('pdf')">
+                        <div class="flex items-center space-x-2">
+                            <span>Export as PDF</span>
+                            <LockClosedIcon
+                                v-if="!isAllowedToPerformPremiumAction()"
+                                class="w-3.5 text-text-tertiary" />
+                        </div>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem @click="triggerExport('xlsx')">
+                        Export as Excel
+                    </DropdownMenuItem>
+                    <DropdownMenuItem @click="triggerExport('csv')">
+                        Export as CSV
+                    </DropdownMenuItem>
+                    <DropdownMenuItem @click="triggerExport('ods')">
+                        Export as ODS
+                    </DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
+            <SecondaryButton v-if="canCreateReports()" :icon="SaveIcon" @click="onSaveReportClick">
+                Save Report
+            </SecondaryButton>
         </div>
+        <DropdownMenu>
+            <DropdownMenuTrigger as-child class="sm:hidden">
+                <button
+                    class="p-1.5 rounded-lg border border-border-tertiary text-text-secondary hover:text-text-primary hover:bg-secondary transition"
+                    aria-label="More options">
+                    <EllipsisVerticalIcon class="w-5 h-5" />
+                </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+                <DropdownMenuItem @click="triggerExport('pdf')">
+                    <div class="flex items-center space-x-2">
+                        <span>Export as PDF</span>
+                        <LockClosedIcon
+                            v-if="!isAllowedToPerformPremiumAction()"
+                            class="w-3.5 text-text-tertiary" />
+                    </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="triggerExport('xlsx')">
+                    Export as Excel
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="triggerExport('csv')"> Export as CSV </DropdownMenuItem>
+                <DropdownMenuItem @click="triggerExport('ods')"> Export as ODS </DropdownMenuItem>
+                <DropdownMenuItem v-if="canCreateReports()" @click="onSaveReportClick">
+                    Save Report
+                </DropdownMenuItem>
+            </DropdownMenuContent>
+        </DropdownMenu>
     </MainContainer>
-    <div class="py-2.5 w-full border-b border-default-background-separator">
-        <MainContainer class="sm:flex space-y-4 sm:space-y-0 justify-between">
-            <div class="flex flex-wrap items-center space-y-2 sm:space-y-0 space-x-3">
-                <div class="text-sm font-medium">Filters</div>
-                <MemberMultiselectDropdown v-model="selectedMembers" @submit="updateReporting">
-                    <template #trigger>
-                        <ReportingFilterBadge
-                            :count="selectedMembers.length"
-                            :active="selectedMembers.length > 0"
-                            title="Members"
-                            :icon="UserGroupIcon"></ReportingFilterBadge>
-                    </template>
-                </MemberMultiselectDropdown>
-                <ProjectMultiselectDropdown v-model="selectedProjects" @submit="updateReporting">
-                    <template #trigger>
-                        <ReportingFilterBadge
-                            :count="selectedProjects.length"
-                            :active="selectedProjects.length > 0"
-                            title="Projects"
-                            :icon="FolderIcon"></ReportingFilterBadge>
-                    </template>
-                </ProjectMultiselectDropdown>
-                <TaskMultiselectDropdown v-model="selectedTasks" @submit="updateReporting">
-                    <template #trigger>
-                        <ReportingFilterBadge
-                            :count="selectedTasks.length"
-                            :active="selectedTasks.length > 0"
-                            title="Tasks"
-                            :icon="CheckCircleIcon"></ReportingFilterBadge>
-                    </template>
-                </TaskMultiselectDropdown>
-                <ClientMultiselectDropdown v-model="selectedClients" @submit="updateReporting">
-                    <template #trigger>
-                        <ReportingFilterBadge
-                            :count="selectedClients.length"
-                            :active="selectedClients.length > 0"
-                            title="Clients"
-                            :icon="FolderIcon"></ReportingFilterBadge>
-                    </template>
-                </ClientMultiselectDropdown>
-                <TagDropdown
-                    v-model="selectedTags"
-                    :create-tag
-                    :tags="tags"
-                    @submit="updateReporting">
-                    <template #trigger>
-                        <ReportingFilterBadge
-                            :count="selectedTags.length"
-                            :active="selectedTags.length > 0"
-                            title="Tags"
-                            :icon="TagIcon"></ReportingFilterBadge>
-                    </template>
-                </TagDropdown>
-
-                <SelectDropdown
-                    v-model="billable"
-                    :get-key-from-item="(item) => item.value"
-                    :get-name-for-item="(item) => item.label"
-                    :items="[
-                        {
-                            label: 'Both',
-                            value: null,
-                        },
-                        {
-                            label: 'Billable',
-                            value: 'true',
-                        },
-                        {
-                            label: 'Non Billable',
-                            value: 'false',
-                        },
-                    ]"
-                    @changed="updateReporting">
-                    <template #trigger>
-                        <ReportingFilterBadge
-                            :active="billable !== null"
-                            :title="billable === 'false' ? 'Non Billable' : 'Billable'"
-                            :icon="BillableIcon"></ReportingFilterBadge>
-                    </template>
-                </SelectDropdown>
-                <ReportingRoundingControls
-                    v-model:enabled="roundingEnabled"
-                    v-model:type="roundingType"
-                    v-model:minutes="roundingMinutes"
-                    @change="updateReporting"></ReportingRoundingControls>
-            </div>
-            <div>
-                <DateRangePicker
-                    v-model:start="startDate"
-                    v-model:end="endDate"
-                    @submit="updateReporting"></DateRangePicker>
-            </div>
-        </MainContainer>
-    </div>
+    <MainContainer class="sm:hidden py-2 border-b border-default-background-separator">
+        <ReportingTabNavbar active="reporting"></ReportingTabNavbar>
+    </MainContainer>
+    <ReportingFilterBar
+        v-model:selected-members="selectedMembers"
+        v-model:selected-projects="selectedProjects"
+        v-model:selected-tasks="selectedTasks"
+        v-model:selected-clients="selectedClients"
+        v-model:selected-tags="selectedTags"
+        v-model:billable="billable"
+        v-model:rounding-enabled="roundingEnabled"
+        v-model:rounding-type="roundingType"
+        v-model:rounding-minutes="roundingMinutes"
+        v-model:start-date="startDate"
+        v-model:end-date="endDate" />
     <MainContainer>
         <div class="pt-10 w-full px-3 relative">
             <ReportingChart
-                :grouped-type="aggregatedGraphTimeEntries?.grouped_type"
-                :grouped-data="aggregatedGraphTimeEntries?.grouped_data"></ReportingChart>
+                :grouped-type="aggregatedGraphTimeEntries?.grouped_type ?? null"
+                :grouped-data="aggregatedGraphTimeEntries?.grouped_data ?? null"></ReportingChart>
         </div>
     </MainContainer>
     <MainContainer>
         <div class="sm:grid grid-cols-4 pt-6 items-start">
-            <div class="col-span-3 bg-card-background rounded-lg border border-card-border pt-3">
+            <div class="col-span-3 bg-secondary rounded-lg border border-card-border pt-3">
                 <div
                     class="text-sm flex text-text-primary items-center space-x-3 font-medium px-6 border-b border-card-background-separator pb-3">
                     <span>Group by</span>
                     <ReportingGroupBySelect
                         v-model="group"
-                        :group-by-options="groupByOptions"
-                        @changed="updateTableReporting"></ReportingGroupBySelect>
+                        :group-by-options="groupByOptions"></ReportingGroupBySelect>
                     <span>and</span>
                     <ReportingGroupBySelect
                         v-model="subGroup"
-                        :group-by-options="groupByOptions.filter((el) => el.value !== group)"
-                        @changed="updateTableReporting"></ReportingGroupBySelect>
+                        :group-by-options="
+                            groupByOptions.filter((el) => el.value !== group)
+                        "></ReportingGroupBySelect>
                 </div>
-                <div class="grid items-center" style="grid-template-columns: 1fr 100px 150px">
+                <div
+                    class="grid items-center"
+                    :style="`grid-template-columns: 1fr 100px ${showBillableRate ? '150px' : ''}`">
                     <div
-                        class="contents [&>*]:border-card-background-separator [&>*]:border-b [&>*]:bg-tertiary [&>*]:pb-1.5 [&>*]:pt-1 text-text-secondary text-sm">
+                        class="contents [&>*]:border-card-background-separator [&>*]:border-b [&>*]:bg-secondary [&>*]:pb-1.5 [&>*]:pt-1 text-text-tertiary text-sm">
                         <div class="pl-6">Name</div>
-                        <div class="text-right">Duration</div>
-                        <div class="text-right pr-6">Cost</div>
+                        <div class="text-right" :class="!showBillableRate ? 'pr-6' : ''">
+                            Duration
+                        </div>
+                        <div v-if="showBillableRate" class="text-right pr-6">Cost</div>
                     </div>
                     <template
                         v-if="
@@ -406,12 +416,15 @@ const tableData = computed(() => {
                             :key="entry.description ?? 'none'"
                             :currency="getOrganizationCurrencyString()"
                             :type="aggregatedTableTimeEntries.grouped_type"
+                            :show-cost="showBillableRate"
                             :entry="entry"></ReportingRow>
                         <div class="contents [&>*]:transition text-text-tertiary [&>*]:h-[50px]">
                             <div class="flex items-center pl-6 font-medium">
                                 <span>Total</span>
                             </div>
-                            <div class="justify-end flex items-center font-medium">
+                            <div
+                                class="justify-end flex items-center font-medium"
+                                :class="!showBillableRate ? 'pr-6' : ''">
                                 {{
                                     formatHumanReadableDuration(
                                         aggregatedTableTimeEntries.seconds,
@@ -420,7 +433,9 @@ const tableData = computed(() => {
                                     )
                                 }}
                             </div>
-                            <div class="justify-end pr-6 flex items-center font-medium">
+                            <div
+                                v-if="showBillableRate"
+                                class="justify-end pr-6 flex items-center font-medium">
                                 {{
                                     aggregatedTableTimeEntries.cost
                                         ? formatCents(
@@ -437,7 +452,8 @@ const tableData = computed(() => {
                     </template>
                     <div
                         v-else
-                        class="chart flex flex-col items-center justify-center py-12 col-span-3">
+                        class="chart flex flex-col items-center justify-center py-12"
+                        :class="showBillableRate ? 'col-span-3' : 'col-span-2'">
                         <p class="text-lg text-text-primary font-medium">No time entries found</p>
                         <p>Try to change the filters and time range</p>
                     </div>

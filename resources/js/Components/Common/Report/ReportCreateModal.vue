@@ -4,17 +4,20 @@ import SecondaryButton from '../../../packages/ui/src/Buttons/SecondaryButton.vu
 import DialogModal from '@/packages/ui/src/DialogModal.vue';
 import { ref } from 'vue';
 import PrimaryButton from '../../../packages/ui/src/Buttons/PrimaryButton.vue';
-import InputLabel from '../../../packages/ui/src/Input/InputLabel.vue';
+import { Field, FieldLabel } from '@/packages/ui/src/field';
 import type { CreateReportBody, CreateReportBodyProperties } from '@/packages/api/src';
-import { useMutation } from '@tanstack/vue-query';
+import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import { getCurrentOrganizationId } from '@/utils/useUser';
 import { api } from '@/packages/api/src';
 import { Checkbox } from '@/packages/ui/src';
 import DatePicker from '@/packages/ui/src/Input/DatePicker.vue';
 import { useNotificationsStore } from '@/utils/notification';
+import { getDayJsInstance } from '@/packages/ui/src/utils/time';
+import { router } from '@inertiajs/vue3';
 
 const show = defineModel('show', { default: false });
 const saving = ref(false);
+const queryClient = useQueryClient();
 
 const createReportMutation = useMutation({
     mutationFn: async (report: CreateReportBody) => {
@@ -26,6 +29,11 @@ const createReportMutation = useMutation({
             params: {
                 organization: organizationId,
             },
+        });
+    },
+    onSuccess: () => {
+        queryClient.invalidateQueries({
+            queryKey: ['reports'],
         });
     },
 });
@@ -44,10 +52,14 @@ const report = ref({
 const { handleApiRequestNotifications } = useNotificationsStore();
 
 async function submit() {
+    const publicUntil = report.value.public_until
+        ? getDayJsInstance()(report.value.public_until).utc().format()
+        : null;
     await handleApiRequestNotifications(
         () =>
             createReportMutation.mutateAsync({
                 ...report.value,
+                public_until: publicUntil,
                 properties: { ...props.properties },
             }),
         'Success',
@@ -60,6 +72,7 @@ async function submit() {
                 public_until: null,
             };
             show.value = false;
+            router.visit(route('reporting.shared'));
         }
     );
 }
@@ -75,31 +88,33 @@ async function submit() {
 
         <template #content>
             <div class="items-center space-y-4 w-full">
-                <div class="w-full">
-                    <InputLabel for="name" value="Name" />
-                    <TextInput id="name" v-model="report.name" class="mt-1.5 w-full"></TextInput>
-                </div>
-                <div>
-                    <InputLabel for="description" value="Description" />
+                <Field class="w-full">
+                    <FieldLabel for="name">Name</FieldLabel>
+                    <TextInput id="name" v-model="report.name" class="w-full"></TextInput>
+                </Field>
+                <Field>
+                    <FieldLabel for="description">Description</FieldLabel>
                     <TextInput
                         id="description"
                         v-model="report.description"
-                        class="mt-1.5 w-full"></TextInput>
-                </div>
-                <InputLabel value="Visibility" />
-                <div class="flex items-center space-x-12">
-                    <div class="flex items-center space-x-3 px-2 py-3">
-                        <Checkbox id="is_public" v-model:checked="report.is_public"></Checkbox>
-                        <InputLabel for="is_public" value="Public" />
+                        class="w-full"></TextInput>
+                </Field>
+                <Field>
+                    <FieldLabel>Visibility</FieldLabel>
+                    <div class="flex items-center space-x-12">
+                        <Field orientation="horizontal" class="px-2 py-3">
+                            <Checkbox id="is_public" v-model:checked="report.is_public"></Checkbox>
+                            <FieldLabel for="is_public">Public</FieldLabel>
+                        </Field>
+                        <Field v-if="report.is_public" class="flex-row items-center space-x-4">
+                            <div>
+                                <FieldLabel for="public_until">Expires at</FieldLabel>
+                                <div class="text-text-tertiary font-medium">(optional)</div>
+                            </div>
+                            <DatePicker v-model="report.public_until"></DatePicker>
+                        </Field>
                     </div>
-                    <div v-if="report.is_public" class="flex items-center space-x-4">
-                        <div>
-                            <InputLabel for="public_until" value="Expires at" />
-                            <div class="text-text-tertiary font-medium">(optional)</div>
-                        </div>
-                        <DatePicker id="public_until"></DatePicker>
-                    </div>
-                </div>
+                </Field>
             </div>
         </template>
         <template #footer>

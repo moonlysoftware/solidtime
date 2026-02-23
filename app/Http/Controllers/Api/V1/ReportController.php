@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\Weekday;
+use App\Http\Requests\V1\Report\ReportIndexRequest;
 use App\Http\Requests\V1\Report\ReportStoreRequest;
 use App\Http\Requests\V1\Report\ReportUpdateRequest;
 use App\Http\Resources\V1\Report\DetailedReportResource;
@@ -40,7 +41,7 @@ class ReportController extends Controller
      *
      * @operationId getReports
      */
-    public function index(Organization $organization): ReportCollection
+    public function index(Organization $organization, ReportIndexRequest $request): ReportCollection
     {
         $this->checkPermission($organization, 'reports:view');
 
@@ -150,6 +151,9 @@ class ReportController extends Controller
                 $report->share_secret = null;
                 $report->public_until = null;
             }
+        } elseif ($report->is_public && $request->has('public_until')) {
+            // Allow updating expiration date on already-public reports
+            $report->public_until = $request->getPublicUntil();
         }
         $report->save();
 

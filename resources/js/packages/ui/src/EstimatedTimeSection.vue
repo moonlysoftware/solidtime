@@ -1,23 +1,24 @@
 <script setup lang="ts">
-import DurationInput from '@/packages/ui/src/Input/DurationInput.vue';
+import EstimatedTimeInput from '@/packages/ui/src/Input/EstimatedTimeInput.vue';
 import { ClockIcon } from '@heroicons/vue/20/solid';
-import InputLabel from '@/packages/ui/src/Input/InputLabel.vue';
+import { Field, FieldDescription, FieldLabel } from './field';
 
 const model = defineModel<number | null>();
 const emit = defineEmits(['submit']);
 </script>
 
 <template>
-    <div class="pt-6">
-        <div class="flex items-center space-x-1 mb-2">
-            <ClockIcon class="text-text-quaternary w-4"></ClockIcon>
-            <InputLabel for="billable" value="Time Estimated" />
-        </div>
-        <DurationInput
+    <Field>
+        <FieldLabel for="time_estimated" :icon="ClockIcon">Time Estimated</FieldLabel>
+        <EstimatedTimeInput
+            id="time_estimated"
             v-model="model"
-            class="max-w-[150px]"
-            @submit="emit('submit')"></DurationInput>
-    </div>
+            @submit="emit('submit')"></EstimatedTimeInput>
+        <FieldDescription>
+            You can type natural language like
+            <span class="font-semibold">2h 30m</span>
+        </FieldDescription>
+    </Field>
 </template>
 
 <style scoped></style>
