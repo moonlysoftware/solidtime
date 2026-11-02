@@ -6,11 +6,11 @@ import {
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuTrigger,
-} from '@/Components/ui/dropdown-menu';
+} from '@/packages/ui/src';
 import type { ExportFormat } from '@/types/reporting';
 import { ref } from 'vue';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
-import UpgradeModal from '@/Components/Common/UpgradeModal.vue';
+import UpgradeModal from '@/packages/ui/src/UpgradeModal.vue';
 
 const props = defineProps<{
     download: (format: ExportFormat) => Promise<void>;
@@ -48,9 +48,7 @@ function triggerDownload(format: ExportFormat) {
             <DropdownMenuItem @click="triggerDownload('ods')"> Export as ODS </DropdownMenuItem>
         </DropdownMenuContent>
     </DropdownMenu>
-    <UpgradeModal v-model:show="showPremiumModal">
-        <strong>PDF Reports</strong> are only available in solidtime Professional.
-    </UpgradeModal>
+    <UpgradeModal v-model:show="showPremiumModal" feature="pdf-reports" />
 </template>
 
 <style scoped></style>

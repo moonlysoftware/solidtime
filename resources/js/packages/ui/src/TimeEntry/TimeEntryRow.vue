@@ -18,9 +18,23 @@ import TimeEntryRowDurationInput from '@/packages/ui/src/TimeEntry/TimeEntryRowD
 import TimeEntryMoreOptionsDropdown from '@/packages/ui/src/TimeEntry/TimeEntryMoreOptionsDropdown.vue';
 import { TimeEntryEditModal } from '@/packages/ui/src';
 import BillableToggleButton from '@/packages/ui/src/Input/BillableToggleButton.vue';
+import { getLocalizedDayJs } from '@/packages/ui/src/utils/time';
+import { useBreaksEnabled } from '@/packages/ui/src/utils/useBreaksEnabled';
 import { computed, ref } from 'vue';
 import TimeTrackerProjectTaskDropdown from '@/packages/ui/src/TimeTracker/TimeTrackerProjectTaskDropdown.vue';
-import { Checkbox } from '@/packages/ui/src';
+import {
+    Checkbox,
+    ContextMenu,
+    ContextMenuContent,
+    ContextMenuItem,
+    ContextMenuSeparator,
+    ContextMenuTrigger,
+} from '@/packages/ui/src';
+import { PlayIcon, PencilIcon, DocumentDuplicateIcon, TrashIcon } from '@heroicons/vue/20/solid';
+import BreakLabel from '@/packages/ui/src/TimeEntry/BreakLabel.vue';
+import BreakPlacementHintButton from '@/packages/ui/src/TimeEntry/BreakPlacementHintButton.vue';
+import type { BreakPlacementHint } from '@/packages/ui/src/utils/breakPlacement';
+import type { CreateTimeEntryBody } from '@/packages/api/src';
 
 const props = defineProps<{
     timeEntry: TimeEntry;
@@ -37,17 +51,36 @@ const props = defineProps<{
     deleteTimeEntry: () => void;
     duplicateTimeEntry?: () => void;
     updateTimeEntry: (timeEntry: TimeEntry) => void;
+    createTimeEntry?: (entry: Omit<CreateTimeEntryBody, 'member_id'>) => void;
+    placementHint?: BreakPlacementHint | null;
+    fixInCalendar?: (date: string) => void;
     currency: string;
+    organizationBillableRate: number | null;
     showMember?: boolean;
     showDate?: boolean;
     selected?: boolean;
     canCreateProject: boolean;
     enableEstimatedTime: boolean;
+    isReport?: boolean;
 }>();
 
 const emit = defineEmits<{ selected: []; unselected: [] }>();
 
 const showEditModal = ref(false);
+
+const breaksEnabled = useBreaksEnabled();
+
+const isBreak = computed(() => props.timeEntry.type === 'break');
+
+// Continue/Duplicate create a new entry of the same type, which the server
+// rejects for breaks when breaks are disabled for the organization
+const canRecreate = computed(() => !isBreak.value || breaksEnabled.value);
+
+const showPlacementHint = computed(
+    () => isBreak.value && props.placementHint != null && props.placementHint.misplaced
+);
+
+const breakFixDate = computed(() => getLocalizedDayJs(props.timeEntry.start).format('YYYY-MM-DD'));
 
 function updateTimeEntryDescription(description: string) {
     props.updateTimeEntry({ ...props.timeEntry, description });
@@ -109,123 +142,181 @@ async function handleDeleteTimeEntry() {
 </script>
 
 <template>
-    <div
-        class="border-b border-default-background-separator transition min-w-0 bg-row-background"
-        data-testid="time_entry_row">
-        <MainContainer class="min-w-0">
-            <div class="@xl:flex py-2 min-w-0 items-center justify-between group">
-                <!-- Desktop layout -->
-                <div class="hidden @lg:flex items-center min-w-0">
-                    <Checkbox :checked="selected" @update:checked="onSelectChange" />
-                    <div v-if="indent === true" class="w-10 h-7"></div>
-                    <TimeEntryDescriptionInput
-                        class="min-w-0 mr-4 shrink"
-                        :model-value="timeEntry.description"
-                        @changed="updateTimeEntryDescription"></TimeEntryDescriptionInput>
-                    <TimeTrackerProjectTaskDropdown
-                        class="min-w-0 shrink"
-                        :create-project
-                        :create-client
-                        :can-create-project
-                        :clients
-                        :projects="projects"
-                        :tasks="tasks"
-                        :project="timeEntry.project_id"
-                        :currency="currency"
-                        :enable-estimated-time
-                        :task="timeEntry.task_id"
-                        @changed="updateProjectAndTask"></TimeTrackerProjectTaskDropdown>
-                </div>
-                <div
-                    class="hidden @lg:flex items-center font-medium space-x-1 @lg:space-x-2 shrink-0">
-                    <div v-if="showMember && members" class="text-sm px-2">
-                        {{ memberName }}
-                    </div>
-                    <TimeEntryRowTagDropdown
-                        :create-tag
-                        :tags="tags"
-                        :model-value="timeEntry.tags"
-                        @changed="updateTimeEntryTags"></TimeEntryRowTagDropdown>
-                    <BillableToggleButton
-                        :model-value="timeEntry.billable"
-                        size="small"
-                        faded
-                        @changed="updateTimeEntryBillable"></BillableToggleButton>
-                    <div class="flex-1">
-                        <TimeEntryRangeSelector
-                            :start="timeEntry.start"
-                            :end="timeEntry.end"
-                            :show-date
-                            @changed="updateStartEndTime"></TimeEntryRangeSelector>
-                    </div>
-                    <TimeEntryRowDurationInput
-                        :start="timeEntry.start"
-                        :end="timeEntry.end"
-                        @changed="updateStartEndTime"></TimeEntryRowDurationInput>
-                    <TimeTrackerStartStop
-                        :active="!!(timeEntry.start && !timeEntry.end)"
-                        variant="secondary"
-                        class="opacity-60 flex focus-visible:opacity-100 group-hover:opacity-100"
-                        @changed="onStartStopClick"></TimeTrackerStartStop>
-                    <TimeEntryMoreOptionsDropdown
-                        @edit="handleEdit"
-                        @duplicate="duplicateTimeEntry"
-                        @delete="deleteTimeEntry"></TimeEntryMoreOptionsDropdown>
-                </div>
-                <!-- Mobile layout -->
-                <div class="@lg:hidden">
-                    <!-- First row: description + duration -->
-                    <div class="flex items-center justify-between min-w-0">
-                        <TimeEntryDescriptionInput
-                            class="min-w-0 flex-1"
-                            :model-value="timeEntry.description"
-                            @changed="updateTimeEntryDescription"></TimeEntryDescriptionInput>
-                        <TimeEntryRowDurationInput
-                            :start="timeEntry.start"
-                            :end="timeEntry.end"
-                            @changed="updateStartEndTime"></TimeEntryRowDurationInput>
-                    </div>
-                    <!-- Second row: project/task - tags - billable - start - more -->
-                    <div class="flex items-center justify-between mt-1">
-                        <TimeTrackerProjectTaskDropdown
-                            class="min-w-0"
-                            :create-project
-                            :create-client
-                            :can-create-project
-                            :clients
-                            :projects="projects"
-                            :tasks="tasks"
-                            :project="timeEntry.project_id"
-                            :currency="currency"
-                            :enable-estimated-time
-                            :task="timeEntry.task_id"
-                            @changed="updateProjectAndTask"></TimeTrackerProjectTaskDropdown>
-                        <div class="flex items-center shrink-0">
+    <ContextMenu>
+        <ContextMenuTrigger as-child>
+            <div
+                class="border-b border-default-background-separator transition min-w-0 bg-row-background"
+                data-testid="time_entry_row">
+                <MainContainer class="min-w-0">
+                    <div class="@xl:flex py-2 min-w-0 items-center justify-between group">
+                        <!-- Desktop layout -->
+                        <div class="hidden @lg:flex items-center min-w-0">
+                            <Checkbox :checked="selected" @update:checked="onSelectChange" />
+                            <div v-if="indent === true" class="w-10 h-7"></div>
+                            <TimeEntryDescriptionInput
+                                v-if="!isBreak"
+                                class="min-w-0 mr-4 shrink"
+                                :model-value="timeEntry.description"
+                                @changed="updateTimeEntryDescription"></TimeEntryDescriptionInput>
+                            <BreakLabel v-if="isBreak" class="pl-1.5 @lg:pl-3 pr-2 shrink-0" />
+                            <span
+                                v-if="isBreak && timeEntry.description"
+                                class="min-w-0 mr-4 shrink truncate text-sm text-text-secondary">
+                                {{ timeEntry.description }}
+                            </span>
+                            <BreakPlacementHintButton
+                                v-if="showPlacementHint"
+                                :fix-date="breakFixDate"
+                                :fix-in-calendar="fixInCalendar" />
+                            <TimeTrackerProjectTaskDropdown
+                                v-if="!isBreak"
+                                class="min-w-0 shrink"
+                                :create-project
+                                :create-client
+                                :can-create-project
+                                :clients
+                                :projects="projects"
+                                :tasks="tasks"
+                                :project="timeEntry.project_id"
+                                :currency="currency"
+                                :organization-billable-rate="organizationBillableRate"
+                                :enable-estimated-time
+                                :task="timeEntry.task_id"
+                                @changed="updateProjectAndTask"></TimeTrackerProjectTaskDropdown>
+                        </div>
+                        <div class="hidden @lg:flex items-center space-x-1 @lg:space-x-2 shrink-0">
+                            <div v-if="showMember && members" class="text-sm px-2">
+                                {{ memberName }}
+                            </div>
                             <TimeEntryRowTagDropdown
+                                v-if="!isBreak"
                                 :create-tag
                                 :tags="tags"
                                 :model-value="timeEntry.tags"
-                                compact
                                 @changed="updateTimeEntryTags"></TimeEntryRowTagDropdown>
                             <BillableToggleButton
+                                v-if="!isBreak"
                                 :model-value="timeEntry.billable"
                                 size="small"
+                                faded
                                 @changed="updateTimeEntryBillable"></BillableToggleButton>
+                            <div class="flex-1">
+                                <TimeEntryRangeSelector
+                                    :start="timeEntry.start"
+                                    :end="timeEntry.end"
+                                    :show-date
+                                    @changed="updateStartEndTime"></TimeEntryRangeSelector>
+                            </div>
+                            <TimeEntryRowDurationInput
+                                :start="timeEntry.start"
+                                :end="timeEntry.end"
+                                :is-report="props.isReport"
+                                @changed="updateStartEndTime"></TimeEntryRowDurationInput>
                             <TimeTrackerStartStop
+                                v-if="canRecreate"
                                 :active="!!(timeEntry.start && !timeEntry.end)"
                                 variant="secondary"
-                                class="ml-2"
+                                class="opacity-60 flex focus-visible:opacity-100 group-hover:opacity-100"
                                 @changed="onStartStopClick"></TimeTrackerStartStop>
                             <TimeEntryMoreOptionsDropdown
+                                :show-duplicate="canRecreate"
                                 @edit="handleEdit"
                                 @duplicate="duplicateTimeEntry"
                                 @delete="deleteTimeEntry"></TimeEntryMoreOptionsDropdown>
                         </div>
+                        <!-- Mobile layout -->
+                        <div class="@lg:hidden">
+                            <!-- First row: description + duration -->
+                            <div class="flex items-center justify-between min-w-0">
+                                <TimeEntryDescriptionInput
+                                    v-if="!isBreak"
+                                    class="min-w-0 flex-1"
+                                    :model-value="timeEntry.description"
+                                    @changed="
+                                        updateTimeEntryDescription
+                                    "></TimeEntryDescriptionInput>
+                                <span
+                                    v-else
+                                    class="min-w-0 flex-1 truncate text-sm text-text-secondary pl-1.5">
+                                    {{ timeEntry.description }}
+                                </span>
+                                <TimeEntryRowDurationInput
+                                    :start="timeEntry.start"
+                                    :end="timeEntry.end"
+                                    :is-report="props.isReport"
+                                    @changed="updateStartEndTime"></TimeEntryRowDurationInput>
+                            </div>
+                            <!-- Second row: project/task - tags - billable - start - more -->
+                            <div class="flex items-center justify-between mt-1">
+                                <BreakLabel v-if="isBreak" class="pl-1.5 pr-2 min-w-0" />
+                                <TimeTrackerProjectTaskDropdown
+                                    v-else
+                                    class="min-w-0"
+                                    :create-project
+                                    :create-client
+                                    :can-create-project
+                                    :clients
+                                    :projects="projects"
+                                    :tasks="tasks"
+                                    :project="timeEntry.project_id"
+                                    :currency="currency"
+                                    :organization-billable-rate="organizationBillableRate"
+                                    :enable-estimated-time
+                                    :task="timeEntry.task_id"
+                                    @changed="
+                                        updateProjectAndTask
+                                    "></TimeTrackerProjectTaskDropdown>
+                                <div class="flex items-center shrink-0">
+                                    <TimeEntryRowTagDropdown
+                                        v-if="!isBreak"
+                                        :create-tag
+                                        :tags="tags"
+                                        :model-value="timeEntry.tags"
+                                        compact
+                                        @changed="updateTimeEntryTags"></TimeEntryRowTagDropdown>
+                                    <BillableToggleButton
+                                        v-if="!isBreak"
+                                        :model-value="timeEntry.billable"
+                                        size="small"
+                                        @changed="updateTimeEntryBillable"></BillableToggleButton>
+                                    <TimeTrackerStartStop
+                                        v-if="canRecreate"
+                                        :active="!!(timeEntry.start && !timeEntry.end)"
+                                        variant="secondary"
+                                        class="ml-2"
+                                        @changed="onStartStopClick"></TimeTrackerStartStop>
+                                    <TimeEntryMoreOptionsDropdown
+                                        :show-duplicate="canRecreate"
+                                        @edit="handleEdit"
+                                        @duplicate="duplicateTimeEntry"
+                                        @delete="deleteTimeEntry"></TimeEntryMoreOptionsDropdown>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
+                </MainContainer>
             </div>
-        </MainContainer>
-    </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent class="min-w-[160px]">
+            <ContextMenuItem v-if="canRecreate" class="space-x-3" @select="onStartStopClick()">
+                <PlayIcon class="w-4 h-4 text-icon-default" />
+                <span>Continue</span>
+            </ContextMenuItem>
+            <ContextMenuItem class="space-x-3" @select="handleEdit()">
+                <PencilIcon class="w-4 h-4 text-icon-default" />
+                <span>Edit</span>
+            </ContextMenuItem>
+            <ContextMenuItem v-if="canRecreate" class="space-x-3" @select="duplicateTimeEntry?.()">
+                <DocumentDuplicateIcon class="w-4 h-4 text-icon-default" />
+                <span>Duplicate</span>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem class="space-x-3 text-destructive" @select="deleteTimeEntry()">
+                <TrashIcon class="w-4 h-4 text-icon-default" />
+                <span>Delete</span>
+            </ContextMenuItem>
+        </ContextMenuContent>
+    </ContextMenu>
 
     <TimeEntryEditModal
         v-if="showEditModal"
@@ -242,6 +333,7 @@ async function handleDeleteTimeEntry() {
         :tasks="tasks"
         :clients="clients"
         :currency="currency"
+        :organization-billable-rate="organizationBillableRate"
         :can-create-project="canCreateProject" />
 </template>
 

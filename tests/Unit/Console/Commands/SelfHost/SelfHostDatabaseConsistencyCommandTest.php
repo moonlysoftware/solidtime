@@ -13,6 +13,7 @@ use App\Models\Task;
 use App\Models\TimeEntry;
 use App\Models\User;
 use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Tests\TestCaseWithDatabase;
@@ -28,6 +29,26 @@ class SelfHostDatabaseConsistencyCommandTest extends TestCaseWithDatabase
         $project2 = Project::factory()->forOrganization($user->organization)->create();
         $task = Task::factory()->forOrganization($user->organization)->forProject($project1)->create();
         $timeEntry = TimeEntry::factory()->forMember($user->member)->forTask($task)->forProject($project2)->create();
+
+        // Act
+        $exitCode = $this->withoutMockingConsoleOutput()->artisan('self-host:database-consistency');
+
+        // Assert
+        $this->assertSame(Command::FAILURE, $exitCode);
+        $output = Artisan::output();
+        $this->assertSame("Consistency problem: Time entries have a task that does not belong to the project of the time entry\n  - ".$timeEntry->getKey()."\n", $output);
+    }
+
+    public function test_checks_that_task_need_to_be_part_of_project_in_time_entries_with_no_project_in_time_entry(): void
+    {
+        // Arrange
+        $user = $this->createUserWithRole(Role::Owner);
+        $project = Project::factory()->forOrganization($user->organization)->create();
+        $task = Task::factory()->forOrganization($user->organization)->forProject($project)->create();
+        $timeEntry = TimeEntry::factory()->forMember($user->member)->forTask($task)->create([
+            'project_id' => null,
+            'client_id' => null,
+        ]);
 
         // Act
         $exitCode = $this->withoutMockingConsoleOutput()->artisan('self-host:database-consistency');
@@ -157,5 +178,27 @@ class SelfHostDatabaseConsistencyCommandTest extends TestCaseWithDatabase
         $this->assertSame(Command::FAILURE, $exitCode);
         $output = Artisan::output();
         $this->assertSame("Consistency problem: Users have a current organization that they are not a member of\n  - ".$user1->user->getKey()."\n", $output);
+    }
+
+    public function test_checks_that_end_of_time_entries_is_not_before_start(): void
+    {
+        // Arrange
+        $user = $this->createUserWithRole(Role::Owner);
+        $timeEntry = TimeEntry::factory()->forMember($user->member)->create([
+            'start' => Carbon::parse('2026-08-01T03:00:00Z'),
+            'end' => Carbon::parse('2026-08-01T02:59:55Z'),
+        ]);
+        TimeEntry::factory()->forMember($user->member)->create([
+            'start' => Carbon::parse('2026-08-01T04:00:00Z'),
+            'end' => Carbon::parse('2026-08-01T04:00:00Z'),
+        ]);
+
+        // Act
+        $exitCode = $this->withoutMockingConsoleOutput()->artisan('self-host:database-consistency');
+
+        // Assert
+        $this->assertSame(Command::FAILURE, $exitCode);
+        $output = Artisan::output();
+        $this->assertSame("Consistency problem: Time entries have an end that is before the start\n  - ".$timeEntry->getKey()."\n", $output);
     }
 }

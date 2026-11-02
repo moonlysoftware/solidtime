@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 permissions:
   contents: read
 
@@ -29,7 +30,7 @@ jobs:
 
     steps:
       - name: "Checkout code"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: "Setup PHP"
         uses: shivammathur/setup-php@v2
@@ -52,15 +53,14 @@ jobs:
         run: php artisan scramble:export --path=build/api-docs.json
 
       - name: "Upload API docs to GitHub"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-docs.json
           path: build/api-docs.json
 
-      - name: "Download Fastfront CLI"
-        run: curl https://fastfront-cli.s3.fr-par.scw.cloud/fastfront-cli.phar -o fastfront-cli.phar
-
-      - name: "Deploy with Fastfront"
-        run: php fastfront-cli.phar deploy 9beab6cf-f459-446b-85f1-38ec007cf457 ./build
-        env:
-          FASTFRONT_API_KEY: ${{ secrets.FASTFRONT_API_DOCS_API_KEY }}
+      - name: "Deploy with FastFront"
+        uses: fastfront-io/deploy-action@v0.0.1
+        with:
+          folder: './build'
+          environment: ${{ vars.FASTFRONT_API_DOCS_STAGE }}
+          api_key: ${{ secrets.FASTFRONT_API_DOCS_STAGE_KEY }}

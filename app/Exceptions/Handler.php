@@ -6,7 +6,11 @@ namespace App\Exceptions;
 
 use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
+use League\OAuth2\Server\Exception\OAuthServerException;
+use Symfony\Component\HttpFoundation\Exception\SuspiciousOperationException;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\BadRequestHttpException;
 use Throwable;
 
 class Handler extends ExceptionHandler
@@ -29,6 +33,33 @@ class Handler extends ExceptionHandler
     {
         $this->reportable(function (Throwable $e): void {
             //
+        });
+
+        $this->dontReportWhen(fn (Throwable $e): bool => $e instanceof OAuthServerException
+            && $e->getErrorType() === 'access_denied'
+            && $e->getHttpStatusCode() === 401);
+
+        // A request on an untrusted host (see App\Http\Middleware\TrustHosts)
+        // otherwise renders as a bare "Bad request." 400. Show a message that
+        // says how to fix it instead. The framework has already converted the
+        // SuspiciousOperationException into a BadRequestHttpException by the time
+        // renderables run, so we match that and inspect the original.
+        $this->renderable(function (BadRequestHttpException $e, Request $request): ?Response {
+            $previous = $e->getPrevious();
+
+            if (! $previous instanceof SuspiciousOperationException
+                || ! str_starts_with($previous->getMessage(), 'Untrusted Host')) {
+                return null; // any other bad request keeps the default response
+            }
+
+            $message = 'This hostname is not configured for this instance. '
+                .'Set APP_URL, or add the host to TRUSTED_HOSTS.';
+
+            if ($request->expectsJson()) {
+                return response()->json(['message' => $message], 400);
+            }
+
+            return response()->view('errors.untrusted-host', ['message' => $message], 400);
         });
     }
 

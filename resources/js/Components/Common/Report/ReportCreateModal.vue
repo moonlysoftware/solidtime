@@ -79,7 +79,7 @@ async function submit() {
 </script>
 
 <template>
-    <DialogModal closeable :show="show" @close="show = false">
+    <DialogModal closeable :show="show" @close="show = false" @submit="submit">
         <template #title>
             <div class="flex space-x-2">
                 <span> Create Report </span>
@@ -111,7 +111,7 @@ async function submit() {
                                 <FieldLabel for="public_until">Expires at</FieldLabel>
                                 <div class="text-text-tertiary font-medium">(optional)</div>
                             </div>
-                            <DatePicker v-model="report.public_until"></DatePicker>
+                            <DatePicker v-model="report.public_until" clearable></DatePicker>
                         </Field>
                     </div>
                 </Field>

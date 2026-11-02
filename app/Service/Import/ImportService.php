@@ -25,7 +25,7 @@ class ImportService
         /** @var ImporterContract $importer */
         $importer = app(ImporterProvider::class)->getImporter($importerType);
         $importer->init($organization);
-        Storage::disk(config('filesystems.default'))
+        Storage::disk(config('filesystems.private'))
             ->put('import/'.Carbon::now()->toDateString().'-'.$organization->getKey().'-'.Str::uuid(), $data);
 
         $lock = Cache::lock('import:'.$organization->getKey(), config('octane.max_execution_time', 60) + 1);

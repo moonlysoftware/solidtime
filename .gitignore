@@ -6,6 +6,7 @@ dist
 /public/storage
 /public/css
 /public/js
+/public/fonts/filament
 /public/vendor
 /lang/vendor
 /storage/*.key
@@ -26,9 +27,10 @@ yarn-error.log
 /blob-report/
 /playwright/.cache/
 /coverage
-/extensions
+/extensions/*
 !/extensions/.gitkeep
 !/extensions/extensions_autoload.php
+!/extensions/manifest.json
 /auth.json
 /modules_statuses.json
 /k8s
@@ -42,3 +44,5 @@ yarn-error.log
 /data
 /config/caddy
 /config/composer
+/config/psysh
+/AGENTS.md

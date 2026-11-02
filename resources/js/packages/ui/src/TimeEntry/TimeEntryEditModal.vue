@@ -17,20 +17,21 @@ import type {
 } from '@/packages/api/src';
 import TagDropdown from '@/packages/ui/src/Tag/TagDropdown.vue';
 import BillableIcon from '@/packages/ui/src/Icons/BillableIcon.vue';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/Components/ui/select';
+import { useBillableRatesLock } from '@/packages/ui/src/utils/useBillableRatesLock';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '..';
 import { Button } from '@/packages/ui/src/Buttons';
 import DatePicker from '@/packages/ui/src/Input/DatePicker.vue';
 import DurationHumanInput from '@/packages/ui/src/Input/DurationHumanInput.vue';
 
 import { InformationCircleIcon } from '@heroicons/vue/20/solid';
+import { Coffee } from '@lucide/vue';
 import type { Tag, Task } from '@/packages/api/src';
 import TimePickerSimple from '@/packages/ui/src/Input/TimePickerSimple.vue';
+import { useBreaksEnabled } from '@/packages/ui/src/utils/useBreaksEnabled';
+
+// Breaks may have been disabled after this entry was created, so an existing break can still be
+// edited (and converted back), but a work entry may only offer the break option when enabled.
+const breaksEnabled = useBreaksEnabled();
 
 const show = defineModel('show', { default: false });
 const saving = ref(false);
@@ -49,6 +50,7 @@ const props = defineProps<{
     tasks: Task[];
     clients: Client[];
     currency: string;
+    organizationBillableRate: number | null;
     canCreateProject: boolean;
 }>();
 
@@ -63,6 +65,7 @@ watch(show, (value) => {
 });
 
 const editableTimeEntry = ref<TimeEntry | null>(null);
+const { locked: billableRatesLocked } = useBillableRatesLock();
 
 watch(
     () => props.timeEntry,
@@ -133,6 +136,11 @@ async function deleteEntry() {
     }
 }
 
+// Organizations with locked billable rates can not make a non-billable time entry billable
+const billableOptionLocked = computed(
+    () => billableRatesLocked.value && !props.timeEntry?.billable
+);
+
 const billableProxy = computed({
     get: () =>
         editableTimeEntry.value ? (editableTimeEntry.value.billable ? 'true' : 'false') : 'false',
@@ -142,10 +150,28 @@ const billableProxy = computed({
         }
     },
 });
+
+const isBreak = computed(() => editableTimeEntry.value?.type === 'break');
+
+const typeProxy = computed({
+    get: () => editableTimeEntry.value?.type ?? 'work',
+    set: (value: string) => {
+        if (editableTimeEntry.value) {
+            editableTimeEntry.value.type = value as TimeEntry['type'];
+            if (value === 'break') {
+                // Breaks can not be billable, have tags or belong to a project/task
+                editableTimeEntry.value.project_id = null;
+                editableTimeEntry.value.task_id = null;
+                editableTimeEntry.value.billable = false;
+                editableTimeEntry.value.tags = [];
+            }
+        }
+    },
+});
 </script>
 
 <template>
-    <DialogModal closeable :show="show" @close="show = false">
+    <DialogModal closeable :show="show" @close="show = false" @submit="submit">
         <template #title>
             <div class="flex space-x-2">
                 <span> Edit time entry </span>
@@ -166,29 +192,47 @@ const billableProxy = computed({
                             @keydown.enter="submit" />
                     </div>
                 </div>
-                <div class="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-4">
-                    <div class="flex-1 min-w-0">
+                <div class="flex flex-col sm:flex-row sm:items-end gap-2">
+                    <div v-if="!isBreak" class="flex-1 min-w-0">
                         <TimeTrackerProjectTaskDropdown
                             v-model:project="editableTimeEntry.project_id"
                             v-model:task="editableTimeEntry.task_id"
                             variant="input"
+                            size="default"
                             :clients
                             :create-project
                             :create-client
                             :can-create-project="canCreateProject"
                             :currency="currency"
+                            :organization-billable-rate="organizationBillableRate"
                             :projects="projects"
                             :tasks="tasks"
                             :enable-estimated-time="enableEstimatedTime" />
                     </div>
+                    <div v-else class="flex-1 min-w-0"></div>
                     <div class="flex items-center gap-2 shrink-0">
+                        <Select v-if="breaksEnabled || isBreak" v-model="typeProxy">
+                            <SelectTrigger :show-chevron="false">
+                                <SelectValue class="flex items-center gap-2">
+                                    <Coffee
+                                        class="h-4 w-4"
+                                        :class="isBreak ? 'text-amber-500' : 'text-icon-default'" />
+                                    <span>{{ isBreak ? 'Break' : 'Work time' }}</span>
+                                </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="work">Work time</SelectItem>
+                                <SelectItem value="break">Break</SelectItem>
+                            </SelectContent>
+                        </Select>
                         <TagDropdown
+                            v-if="!isBreak"
                             v-model="editableTimeEntry.tags"
                             :create-tag
                             :tags="tags"
                             :show-no-tag-option="false">
                             <template #trigger>
-                                <Button variant="input" size="sm">
+                                <Button variant="input">
                                     <TagIcon class="h-4 text-icon-default" />
                                     <span>{{
                                         editableTimeEntry.tags.length === 0
@@ -198,8 +242,8 @@ const billableProxy = computed({
                                 </Button>
                             </template>
                         </TagDropdown>
-                        <Select v-model="billableProxy">
-                            <SelectTrigger size="sm" :show-chevron="false">
+                        <Select v-if="!isBreak" v-model="billableProxy">
+                            <SelectTrigger :show-chevron="false">
                                 <SelectValue class="flex items-center gap-2">
                                     <BillableIcon class="h-4 text-icon-default" />
                                     <span>{{
@@ -208,7 +252,9 @@ const billableProxy = computed({
                                 </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="true">Billable</SelectItem>
+                                <SelectItem value="true" :disabled="billableOptionLocked"
+                                    >Billable</SelectItem
+                                >
                                 <SelectItem value="false">Non Billable</SelectItem>
                             </SelectContent>
                         </Select>

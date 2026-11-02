@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\V1\TimeEntry;
 
+use App\Enums\TagMatchType;
 use App\Enums\TimeEntryRoundingType;
+use App\Enums\TimeEntryType;
 use App\Http\Requests\V1\BaseFormRequest;
 use App\Models\Client;
 use App\Models\Member;
@@ -13,6 +15,7 @@ use App\Models\Project;
 use App\Models\Tag;
 use App\Models\Task;
 use App\Service\TimeEntryFilter;
+use Closure;
 use Illuminate\Contracts\Validation\Rule as RuleContract;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Database\Eloquent\Builder;
@@ -27,12 +30,12 @@ class TimeEntryIndexRequest extends BaseFormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * @return array<string, array<string|ValidationRule|RuleContract|\Closure>>
+     * @return array<string, array<string|ValidationRule|RuleContract|Closure>>
      */
     public function rules(): array
     {
         return [
-            // Filter by member ID
+            // Filter by member ID. Without it, users who may view all time entries (owners, admins) get the entries of every member; pass your own member ID (from GET /v1/users/me/memberships) to get only yours
             'member_id' => [
                 'string',
                 ExistsEloquent::make(Member::class, null, function (Builder $builder): Builder {
@@ -59,7 +62,7 @@ class TimeEntryIndexRequest extends BaseFormRequest
             ],
             'client_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -76,7 +79,7 @@ class TimeEntryIndexRequest extends BaseFormRequest
             ],
             'project_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -93,7 +96,7 @@ class TimeEntryIndexRequest extends BaseFormRequest
             ],
             'tag_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -103,6 +106,10 @@ class TimeEntryIndexRequest extends BaseFormRequest
                     })->uuid()->validate($attribute, $value, $fail);
                 },
             ],
+            'tag_match_type' => [
+                'string',
+                Rule::enum(TagMatchType::class),
+            ],
             // Filter by task IDs, task IDs are OR combined
             'task_ids' => [
                 'array',
@@ -110,7 +117,7 @@ class TimeEntryIndexRequest extends BaseFormRequest
             ],
             'task_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -143,7 +150,12 @@ class TimeEntryIndexRequest extends BaseFormRequest
                 'string',
                 'in:true,false',
             ],
-            // Limit the number of returned time entries (default: 150)
+            // Filter by time entry type
+            'type' => [
+                'string',
+                Rule::enum(TimeEntryType::class),
+            ],
+            // Limit the number of returned time entries (default: 100)
             'limit' => [
                 'integer',
                 'min:1',
@@ -188,6 +200,15 @@ class TimeEntryIndexRequest extends BaseFormRequest
     public function getOffset(): int
     {
         return $this->has('offset') ? (int) $this->validated('offset', 0) : 0;
+    }
+
+    public function getTagMatchType(): ?TagMatchType
+    {
+        if (! $this->has('tag_match_type') || $this->validated('tag_match_type') === null) {
+            return null;
+        }
+
+        return TagMatchType::from($this->validated('tag_match_type'));
     }
 
     public function getRoundingType(): ?TimeEntryRoundingType

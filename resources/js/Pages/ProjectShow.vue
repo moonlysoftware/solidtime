@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import UpgradeLockedBadge from '@/packages/ui/src/UpgradeLockedBadge.vue';
+import { canUseBillableRates } from '@/utils/billing';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
 import AppLayout from '@/Layouts/AppLayout.vue';
 import { FolderIcon, PlusIcon } from '@heroicons/vue/20/solid';
@@ -15,14 +17,14 @@ import {
 import { Link } from '@inertiajs/vue3';
 import TaskCreateModal from '@/Components/Common/Task/TaskCreateModal.vue';
 import TaskTable from '@/Components/Common/Task/TaskTable.vue';
+import type { SortColumn } from '@/Components/Common/Task/TaskTable.vue';
 import CardTitle from '@/packages/ui/src/CardTitle.vue';
 import Card from '@/Components/Common/Card.vue';
 import ProjectMemberTable from '@/Components/Common/ProjectMember/ProjectMemberTable.vue';
 import ProjectMemberCreateModal from '@/Components/Common/ProjectMember/ProjectMemberCreateModal.vue';
 import { useProjectMembersQuery } from '@/utils/useProjectMembersQuery';
 import { canCreateProjects, canCreateTasks, canViewProjectMembers } from '@/utils/permissions';
-import TabBarItem from '@/Components/Common/TabBar/TabBarItem.vue';
-import TabBar from '@/Components/Common/TabBar/TabBar.vue';
+import { TabBar, TabBarItem } from '@/packages/ui/src';
 import { useTasksQuery } from '@/utils/useTasksQuery';
 import ProjectEditModal from '@/Components/Common/Project/ProjectEditModal.vue';
 import { Badge } from '@/packages/ui/src';
@@ -30,6 +32,7 @@ import { formatCents } from '../packages/ui/src/utils/money';
 import { getOrganizationCurrencyString } from '../utils/money';
 import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
 import { getCurrentOrganizationId } from '@/utils/useUser';
+import { useTableSortState } from '@/utils/useTableSortState';
 
 const { projects } = useProjectsQuery();
 
@@ -66,6 +69,11 @@ const activeTab = ref<'active' | 'done'>('active');
 
 const { tasks } = useTasksQuery();
 
+const { tableState, handleSort } = useTableSortState<SortColumn>('task-table-state', {
+    sortColumn: 'name',
+    sortDirection: 'asc',
+});
+
 const shownTasks = computed(() => {
     return tasks.value.filter((task) => {
         if (activeTab.value === 'active') {
@@ -74,6 +82,9 @@ const shownTasks = computed(() => {
         return task.project_id === projectId && task.is_done;
     });
 });
+
+// Note: The page sits above the app layout that provides the lock, so it can not inject it
+const billableRatesLocked = computed(() => !canUseBillableRates());
 </script>
 
 <template>
@@ -110,15 +121,22 @@ const shownTasks = computed(() => {
                         </div>
                     </li>
                 </ol>
-                <div class="px-4">
-                    <Badge v-if="project?.billable_rate">
+                <div class="px-4 space-x-1">
+                    <UpgradeLockedBadge v-if="billableRatesLocked"
+                        >Billable Rates</UpgradeLockedBadge
+                    >
+                    <Badge v-else-if="project?.billable_rate">
                         {{ billableRateFormatted }}
                         / h
                     </Badge>
-                    <Badge v-if="project?.is_billable && !project?.billable_rate">
+                    <Badge
+                        v-if="
+                            project?.is_billable && !project?.billable_rate && !billableRatesLocked
+                        ">
                         Default Rate
                     </Badge>
                     <Badge v-if="!project?.is_billable"> Non-Billable </Badge>
+                    <Badge>{{ project?.is_public ? 'Public' : 'Private' }}</Badge>
                 </div>
             </nav>
             <div>
@@ -159,7 +177,12 @@ const shownTasks = computed(() => {
                         </template>
                     </CardTitle>
                     <Card>
-                        <TaskTable :tasks="shownTasks" :project-id="projectId"></TaskTable>
+                        <TaskTable
+                            :tasks="shownTasks"
+                            :project-id="projectId"
+                            :sort-column="tableState.sortColumn"
+                            :sort-direction="tableState.sortDirection"
+                            @sort="handleSort"></TaskTable>
                     </Card>
                 </div>
                 <div v-if="canViewProjectMembers()">

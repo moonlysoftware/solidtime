@@ -5,16 +5,18 @@ declare(strict_types=1);
 namespace App\Service\Import\Importers;
 
 use Exception;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use League\Csv\Exception as CsvException;
 use League\Csv\Reader;
+use Override;
 
 class ClockifyProjectsImporter extends DefaultImporter
 {
     /**
      * @throws ImportException
      */
-    #[\Override]
+    #[Override]
     public function importData(string $data, string $timezone): void
     {
         try {
@@ -24,10 +26,12 @@ class ClockifyProjectsImporter extends DefaultImporter
             $header = $reader->getHeader();
             $this->validateHeader($header);
             $billableRateKey = $this->getBillableRateKey($header);
+            $tasksKey = $this->getTasksKey($header);
             $records = $reader->getRecords();
             foreach ($records as $record) {
                 $clientId = null;
-                if ($record['Client'] !== '') {
+                // Newer Clockify exports no longer contain a "Client" column.
+                if (($record['Client'] ?? '') !== '') {
                     $clientId = $this->clientImportHelper->getKey([
                         'name' => $record['Client'],
                         'organization_id' => $this->organization->id,
@@ -41,15 +45,17 @@ class ClockifyProjectsImporter extends DefaultImporter
                         'organization_id' => $this->organization->id,
                     ], [
                         'color' => $this->colorService->getRandomColor(),
-                        'is_billable' => $record['Billability'] === 'Yes',
+                        'is_billable' => ($record['Billability'] ?? '') === 'Yes',
                         'billable_rate' => $billableRateKey !== null && $record[$billableRateKey] !== '' ? (int) (((float) $record[$billableRateKey]) * 100) : null,
-                        'estimated_time' => $record['Estimated (h)'] !== '' && is_numeric($record['Estimated (h)']) ? (int) ($record['Estimated (h)'] * 3600) : null,
+                        'estimated_time' => isset($record['Estimated (h)']) && is_numeric($record['Estimated (h)']) ? (int) ($record['Estimated (h)'] * 3600) : null,
+                        'archived_at' => $record['Status'] === 'Archived' ? Carbon::now() : null,
                     ]);
                 }
 
-                if ($record['Task'] !== '') {
-                    $tasks = explode(', ', $record['Task']);
+                if ($tasksKey !== null && $record[$tasksKey] !== '') {
+                    $tasks = explode(', ', $record[$tasksKey]);
                     foreach ($tasks as $task) {
+                        $this->checkTaskNameLength($task);
                         $this->taskImportHelper->getKey([
                             'name' => $task,
                             'project_id' => $projectId,
@@ -77,17 +83,35 @@ class ClockifyProjectsImporter extends DefaultImporter
     {
         $requiredFields = [
             'Project',
-            'Client',
             'Status',
             'Visibility',
-            'Billability',
-            'Task',
         ];
         foreach ($requiredFields as $requiredField) {
             if (! in_array($requiredField, $header, true)) {
                 throw new ImportException('Invalid CSV header, missing field: '.$requiredField);
             }
         }
+        // Clockify names the tasks column "Task", "Tasks" or "Activities" depending on the export; accept any.
+        if ($this->getTasksKey($header) === null) {
+            throw new ImportException('Invalid CSV header, missing field: Tasks');
+        }
+    }
+
+    /**
+     * Clockify names the tasks column differently depending on the export
+     * version: "Task" (older), "Tasks" (newer) or "Activities".
+     *
+     * @param  array<string>  $header
+     */
+    private function getTasksKey(array $header): ?string
+    {
+        foreach (['Tasks', 'Task', 'Activities'] as $field) {
+            if (in_array($field, $header, true)) {
+                return $field;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -106,13 +130,13 @@ class ClockifyProjectsImporter extends DefaultImporter
         return $billableRateKey;
     }
 
-    #[\Override]
+    #[Override]
     public function getName(): string
     {
         return __('importer.clockify_projects.name');
     }
 
-    #[\Override]
+    #[Override]
     public function getDescription(): string
     {
         return __('importer.clockify_projects.description');

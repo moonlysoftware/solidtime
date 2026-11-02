@@ -7,15 +7,17 @@ import {
     type WeekStartDay,
 } from '@/packages/ui/src/utils/time';
 import { Popover, PopoverContent, PopoverTrigger } from '@/packages/ui/src/popover';
-import { Calendar } from '@/Components/ui/calendar';
+import { Calendar } from '..';
 import { Button } from '@/packages/ui/src/Buttons';
-import { CalendarIcon } from 'lucide-vue-next';
+import { CalendarIcon, XIcon } from '@lucide/vue';
 import { parseDate, type DateValue } from '@internationalized/date';
 import type { Organization } from '@/packages/api/src';
 
 const props = defineProps<{
     tabindex?: string;
     class?: string;
+    size?: 'sm' | 'default';
+    clearable?: boolean;
 }>();
 
 // This has to be a localized timestamp, not UTC
@@ -59,6 +61,12 @@ function handleDateSelect(newDate: DateValue | undefined) {
     emit('changed', newValue);
     open.value = false;
 }
+
+function handleClear(event: Event) {
+    event.stopPropagation();
+    model.value = null;
+    emit('changed', null);
+}
 </script>
 
 <template>
@@ -67,11 +75,18 @@ function handleDateSelect(newDate: DateValue | undefined) {
             <PopoverTrigger as-child>
                 <Button
                     variant="input"
-                    size="sm"
+                    :size="props.size ?? 'default'"
                     :tabindex="tabindex"
                     :class="['w-full px-2 gap-1.5', props.class]">
                     <CalendarIcon class="!size-3 text-muted-foreground" />
-                    <span>{{ displayDate || 'Pick a date' }}</span>
+                    <span :class="{ 'flex-1': clearable }">{{ displayDate || 'Pick a date' }}</span>
+                    <span
+                        v-if="clearable && model"
+                        role="button"
+                        class="hover:bg-muted rounded p-0.5 transition-colors"
+                        @click.stop="handleClear($event)">
+                        <XIcon class="size-3" />
+                    </span>
                 </Button>
             </PopoverTrigger>
             <PopoverContent class="w-auto p-0" align="center">

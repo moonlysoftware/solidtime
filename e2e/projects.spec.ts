@@ -6,22 +6,17 @@ import { formatCentsWithOrganizationDefaults } from './utils/money';
 import {
     createProjectViaApi,
     createPublicProjectViaApi,
+    createProjectMemberViaApi,
     createTaskViaApi,
     createClientViaApi,
     createTimeEntryViaApi,
     archiveProjectViaApi,
     updateOrganizationSettingViaApi,
 } from './utils/api';
+import { clearTableState, getSeededRowOrder } from './utils/table';
 
 async function goToProjectsOverview(page: Page) {
     await page.goto(PLAYWRIGHT_BASE_URL + '/projects');
-}
-
-// Helper to clear localStorage before tests that check persistence
-async function clearProjectTableState(page: Page) {
-    await page.evaluate(() => {
-        localStorage.removeItem('project-table-state');
-    });
 }
 
 // Create new project via modal
@@ -83,7 +78,7 @@ test('test that archiving and unarchiving projects works', async ({ page, ctx })
     await createProjectViaApi(ctx, { name: newProjectName });
 
     await goToProjectsOverview(page);
-    await clearProjectTableState(page);
+    await clearTableState(page, 'project-table-state');
     await page.reload();
     await expect(page.getByText(newProjectName)).toBeVisible({ timeout: 10000 });
 
@@ -114,6 +109,43 @@ test('test that archiving and unarchiving projects works', async ({ page, ctx })
     await removeStatusFilter(page);
     await selectStatusFilter(page, 'Active');
     await expect(page.getByText(newProjectName)).toBeVisible();
+});
+
+test('test that the client can be changed in the edit project modal', async ({ page, ctx }) => {
+    const projectName = 'Edit Client Project ' + Math.floor(1 + Math.random() * 100000);
+    const clientName = 'Assigned Client ' + Math.floor(1 + Math.random() * 100000);
+    await createProjectViaApi(ctx, { name: projectName });
+    const client = await createClientViaApi(ctx, { name: clientName });
+
+    await page.goto(PLAYWRIGHT_BASE_URL + '/projects');
+    await expect(page.getByText(projectName)).toBeVisible({ timeout: 10000 });
+
+    // Open the project's Edit modal.
+    await page.getByRole('row').first().getByRole('button').click();
+    await page.getByRole('menuitem').getByText('Edit').first().click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    // Open the client dropdown (currently "No Client"), confirm it focuses, and pick the client.
+    await page.getByRole('dialog').getByRole('button', { name: 'No Client' }).click();
+    const clientSearch = page.getByPlaceholder('Search for a client...');
+    await expect(clientSearch).toBeFocused();
+    await clientSearch.fill(clientName);
+    await page.getByRole('option', { name: clientName }).click();
+
+    // The trigger updates to the chosen client.
+    await expect(page.getByRole('dialog').getByRole('button', { name: clientName })).toBeVisible();
+
+    // Saving persists the client assignment.
+    await Promise.all([
+        page.getByRole('button', { name: 'Update Project' }).click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/projects/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200 &&
+                (await response.json()).data.client_id === client.id
+        ),
+    ]);
 });
 
 test('test that updating billable rate works with existing time entries', async ({ page, ctx }) => {
@@ -215,6 +247,59 @@ test('test that creating a non-billable project works', async ({ page }) => {
     ]);
 
     await expect(page.getByTestId('project_table')).toContainText(newProjectName);
+});
+
+test('test that creating a public project via the modal works', async ({ page }) => {
+    const newProjectName = 'Public Project ' + Math.floor(1 + Math.random() * 10000);
+    await goToProjectsOverview(page);
+    await page.getByRole('button', { name: 'Create Project' }).click();
+    await page.getByLabel('Project Name').fill(newProjectName);
+
+    // Visibility defaults to Private — switch it to Public
+    await expect(page.getByRole('dialog').locator('#visibility')).toContainText('Private');
+    await page.getByRole('dialog').locator('#visibility').click();
+    await page.getByRole('option', { name: 'Public' }).click();
+
+    await Promise.all([
+        page.getByRole('button', { name: 'Create Project' }).click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/projects') &&
+                response.request().method() === 'POST' &&
+                response.status() === 201 &&
+                (await response.json()).data.is_public === true
+        ),
+    ]);
+
+    await expect(page.getByTestId('project_table')).toContainText(newProjectName);
+});
+
+test('test that changing a project to public via the edit modal works', async ({ page, ctx }) => {
+    const newProjectName = 'Edit Visibility Project ' + Math.floor(1 + Math.random() * 10000);
+    await createProjectViaApi(ctx, { name: newProjectName });
+
+    await goToProjectsOverview(page);
+    await expect(page.getByText(newProjectName)).toBeVisible({ timeout: 10000 });
+
+    const projectRow = page.getByRole('row').filter({ hasText: newProjectName }).first();
+    await projectRow.getByRole('button').click();
+    await page.locator(`[aria-label='Edit Project ${newProjectName}']`).click();
+
+    // Loaded as Private — switch it to Public
+    await expect(page.getByRole('dialog').locator('#visibility')).toContainText('Private');
+    await page.getByRole('dialog').locator('#visibility').click();
+    await page.getByRole('option', { name: 'Public' }).click();
+
+    await Promise.all([
+        page.getByRole('button', { name: 'Update Project' }).click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/projects/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200 &&
+                (await response.json()).data.is_public === true
+        ),
+    ]);
 });
 
 test('test that switching from custom rate to default rate clears billable rate', async ({
@@ -389,7 +474,7 @@ test('test that sorting projects by all columns works', async ({ page, ctx }) =>
     });
 
     await goToProjectsOverview(page);
-    await clearProjectTableState(page);
+    await clearTableState(page, 'project-table-state');
     await page.reload();
     await expect(page.getByTestId('project_table')).toBeVisible();
     await expect(page.getByText('AAA Project')).toBeVisible();
@@ -518,7 +603,7 @@ test('test that filtering projects by status works', async ({ page, ctx }) => {
     await createProjectViaApi(ctx, { name: newProjectName });
 
     await goToProjectsOverview(page);
-    await clearProjectTableState(page);
+    await clearTableState(page, 'project-table-state');
     await page.reload();
     await expect(page.getByText(newProjectName)).toBeVisible({ timeout: 10000 });
 
@@ -549,7 +634,7 @@ test('test that filtering projects by status works', async ({ page, ctx }) => {
 
 test('test that filter state persists after page reload', async ({ page }) => {
     await goToProjectsOverview(page);
-    await clearProjectTableState(page);
+    await clearTableState(page, 'project-table-state');
     await page.reload();
 
     // Apply Active status filter
@@ -565,9 +650,96 @@ test('test that filter state persists after page reload', async ({ page }) => {
     await expect(page.getByTestId('status-filter-badge')).toBeVisible();
 });
 
+test('test that projects without a client or estimate are ordered by name at the bottom', async ({
+    page,
+    ctx,
+}) => {
+    // Seeded a second apart: created_at only has second precision and same-second rows
+    // fall back to a random UUID order. The spacing makes the API order of the clientless
+    // rows (created_at desc: ZZZ, AAA) deterministic and different from the alphabetical
+    // order the name tie-break should produce.
+    await createProjectViaApi(ctx, { name: 'AAA Tiebreak Project' });
+    await page.waitForTimeout(1100);
+    await createProjectViaApi(ctx, { name: 'ZZZ Tiebreak Project' });
+
+    const clientAardvark = await createClientViaApi(ctx, { name: 'Aardvark Co' });
+    const clientZulu = await createClientViaApi(ctx, { name: 'Zulu Co' });
+    const projectM = await createProjectViaApi(ctx, {
+        name: 'MMM Tiebreak Project',
+        client_id: clientAardvark.id,
+        estimated_time: 36000, // 10h, 1h tracked below = 10%
+    });
+    await createTimeEntryViaApi(ctx, { duration: '1h', projectId: projectM.id });
+    const projectN = await createProjectViaApi(ctx, {
+        name: 'NNN Tiebreak Project',
+        client_id: clientZulu.id,
+        estimated_time: 14400, // 4h, 2h tracked below = 50%
+    });
+    await createTimeEntryViaApi(ctx, { duration: '2h', projectId: projectN.id });
+
+    await goToProjectsOverview(page);
+    await clearTableState(page, 'project-table-state');
+    await page.reload();
+
+    const table = page.getByTestId('project_table');
+    await expect(table).toBeVisible();
+
+    const seeded = [
+        'AAA Tiebreak Project',
+        'MMM Tiebreak Project',
+        'NNN Tiebreak Project',
+        'ZZZ Tiebreak Project',
+    ];
+    const getOrder = () => getSeededRowOrder(table, seeded);
+
+    // -- Client: empty rows last in both directions, alphabetical among themselves --
+    const clientHeader = table.locator('.select-none', { hasText: 'Client' }).first();
+    await clientHeader.click();
+    await expect
+        .poll(getOrder)
+        .toEqual([
+            'MMM Tiebreak Project',
+            'NNN Tiebreak Project',
+            'AAA Tiebreak Project',
+            'ZZZ Tiebreak Project',
+        ]);
+
+    await clientHeader.click();
+    await expect
+        .poll(getOrder)
+        .toEqual([
+            'NNN Tiebreak Project',
+            'MMM Tiebreak Project',
+            'AAA Tiebreak Project',
+            'ZZZ Tiebreak Project',
+        ]);
+
+    // -- Progress: same, and the first click sorts highest first --
+    const progressHeader = table.locator('.select-none', { hasText: 'Progress' }).first();
+    await progressHeader.click();
+    await expect
+        .poll(getOrder)
+        .toEqual([
+            'NNN Tiebreak Project',
+            'MMM Tiebreak Project',
+            'AAA Tiebreak Project',
+            'ZZZ Tiebreak Project',
+        ]);
+
+    await progressHeader.click();
+    await expect
+        .poll(getOrder)
+        .toEqual([
+            'MMM Tiebreak Project',
+            'NNN Tiebreak Project',
+            'AAA Tiebreak Project',
+            'ZZZ Tiebreak Project',
+        ]);
+});
+
 test('test that sort state persists after page reload', async ({ page }) => {
     await goToProjectsOverview(page);
-    await clearProjectTableState(page);
+    await clearTableState(page, 'project-table-state');
     await page.reload();
 
     // Click on Name header twice to sort descending
@@ -640,7 +812,7 @@ test('test that creating a project with estimated time in human-readable format 
     await page.getByLabel('Project Name').fill(newProjectName);
 
     // Fill in estimated time using human-readable format
-    const estimatedTimeInput = page.getByPlaceholder('e.g. 2h 30m or 1.5');
+    const estimatedTimeInput = page.getByLabel('Time Estimated');
     await estimatedTimeInput.fill('2h 30m');
     await estimatedTimeInput.press('Tab');
 
@@ -668,7 +840,7 @@ test('test that creating a project with estimated time using decimal notation wo
     await page.getByLabel('Project Name').fill(newProjectName);
 
     // Fill in estimated time using decimal notation (1.5 hours = 1h 30m)
-    const estimatedTimeInput = page.getByPlaceholder('e.g. 2h 30m or 1.5');
+    const estimatedTimeInput = page.getByLabel('Time Estimated');
     await estimatedTimeInput.fill('1.5');
     await estimatedTimeInput.press('Tab');
 
@@ -696,7 +868,7 @@ test('test that creating a project with estimated time using comma decimal notat
     await page.getByLabel('Project Name').fill(newProjectName);
 
     // Fill in estimated time using comma decimal notation (2,5 hours = 2h 30m)
-    const estimatedTimeInput = page.getByPlaceholder('e.g. 2h 30m or 1.5');
+    const estimatedTimeInput = page.getByLabel('Time Estimated');
     await estimatedTimeInput.fill('2,5');
     await estimatedTimeInput.press('Tab');
 
@@ -727,7 +899,7 @@ test('test that updating estimated time on existing project works', async ({ pag
     await page.getByRole('menuitem').getByText('Edit').first().click();
 
     // Fill in estimated time
-    const estimatedTimeInput = page.getByPlaceholder('e.g. 2h 30m or 1.5');
+    const estimatedTimeInput = page.getByLabel('Time Estimated');
     await estimatedTimeInput.fill('4h 15m');
     await estimatedTimeInput.press('Tab');
 
@@ -748,7 +920,7 @@ test('test that estimated time input displays formatted value after blur', async
     await goToProjectsOverview(page);
     await page.getByRole('button', { name: 'Create Project' }).click();
 
-    const estimatedTimeInput = page.getByPlaceholder('e.g. 2h 30m or 1.5');
+    const estimatedTimeInput = page.getByLabel('Time Estimated');
 
     // Enter time in various formats and check the displayed value
     await estimatedTimeInput.fill('90');
@@ -801,6 +973,81 @@ test('test that editing a task name on the project detail page works', async ({ 
 });
 
 // =============================================
+// Context Menu Tests
+// =============================================
+
+test('test that project context menu edit updates the project', async ({ page, ctx }) => {
+    const projectName = 'CtxEditProject ' + Math.floor(1 + Math.random() * 10000);
+    const updatedName = 'CtxUpdatedProject ' + Math.floor(1 + Math.random() * 10000);
+    await createProjectViaApi(ctx, { name: projectName });
+    await goToProjectsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: projectName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    await page.getByPlaceholder('Project Name').fill(updatedName);
+    await Promise.all([
+        page.getByRole('button', { name: 'Update Project' }).click(),
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/projects/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+    ]);
+
+    await expect(page.getByTestId('project_table')).toContainText(updatedName);
+    await expect(page.getByTestId('project_table')).not.toContainText(projectName);
+});
+
+test('test that project context menu archive archives the project', async ({ page, ctx }) => {
+    const projectName = 'CtxArchiveProject ' + Math.floor(1 + Math.random() * 10000);
+    await createProjectViaApi(ctx, { name: projectName });
+    await goToProjectsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: projectName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/projects') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+        page.getByRole('menuitem', { name: 'Archive' }).click(),
+    ]);
+    // After archiving, the project stays visible (default filter is 'all') but status changes to 'Archived'
+    await expect(row).toContainText('Archived');
+});
+
+test('test that project context menu delete deletes the project', async ({ page, ctx }) => {
+    const projectName = 'CtxDeleteProject ' + Math.floor(1 + Math.random() * 10000);
+    await createProjectViaApi(ctx, { name: projectName });
+    await goToProjectsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: projectName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/projects') &&
+                response.request().method() === 'DELETE' &&
+                response.status() === 204
+        ),
+        page.getByRole('menuitem', { name: 'Delete' }).click(),
+    ]);
+    await expect(page.getByTestId('project_table')).not.toContainText(projectName);
+});
+
+// =============================================
 // Employee Permission Tests
 // =============================================
 
@@ -850,6 +1097,39 @@ test.describe('Employee Projects Restrictions', () => {
             employee.page.locator(`[aria-label='Delete Project ${projectName}']`)
         ).not.toBeVisible();
     });
+
+    test('employee does not see private projects they are not a member of', async ({
+        ctx,
+        employee,
+    }) => {
+        const publicName = 'EmpPublicVisible ' + Math.floor(Math.random() * 10000);
+        const privateName = 'EmpPrivateHidden ' + Math.floor(Math.random() * 10000);
+        await createPublicProjectViaApi(ctx, { name: publicName });
+        // createProjectViaApi defaults to is_public: false (private); the employee is not a member
+        await createProjectViaApi(ctx, { name: privateName });
+
+        await employee.page.goto(PLAYWRIGHT_BASE_URL + '/projects');
+        await expect(employee.page.getByTestId('projects_view')).toBeVisible({ timeout: 10000 });
+
+        // The public project is visible — confirms the list has loaded
+        await expect(employee.page.getByText(publicName)).toBeVisible({ timeout: 10000 });
+
+        // The private project the employee is not a member of must not appear
+        await expect(employee.page.getByText(privateName)).not.toBeVisible();
+    });
+
+    test('employee can see a private project they are a member of', async ({ ctx, employee }) => {
+        const projectName = 'EmpPrivateMember ' + Math.floor(Math.random() * 10000);
+        const project = await createProjectViaApi(ctx, { name: projectName });
+        // Add the employee as a project member so the private project becomes visible to them
+        await createProjectMemberViaApi(ctx, project.id, { member_id: employee.memberId });
+
+        await employee.page.goto(PLAYWRIGHT_BASE_URL + '/projects');
+        await expect(employee.page.getByTestId('projects_view')).toBeVisible({ timeout: 10000 });
+
+        // The private project is visible because the employee is a member
+        await expect(employee.page.getByText(projectName)).toBeVisible({ timeout: 10000 });
+    });
 });
 
 test.describe('Employee Billable Rate Visibility', () => {
@@ -891,4 +1171,153 @@ test.describe('Employee Billable Rate Visibility', () => {
         const projectRow = employee.page.getByRole('row').filter({ hasText: projectName });
         await expect(projectRow).toContainText('200');
     });
+});
+
+// ──────────────────────────────────────────────────
+// Pagination Tests
+// ──────────────────────────────────────────────────
+
+test.describe('Projects Pagination', () => {
+    test.describe.configure({ timeout: 30000 });
+
+    test('test that project table paginates when there are more than 15 projects', async ({
+        page,
+        ctx,
+    }) => {
+        // Create 17 projects with zero-padded names so alphabetical sort is predictable.
+        // Page size is 15 → page 1 shows indices 00–14, page 2 shows 15–16.
+        const seed = Math.floor(Math.random() * 100000);
+        const prefix = `PaginationProj ${seed} `;
+        await Promise.all(
+            Array.from({ length: 17 }, (_, i) =>
+                createProjectViaApi(ctx, { name: prefix + String(i).padStart(2, '0') })
+            )
+        );
+
+        await goToProjectsOverview(page);
+        await clearTableState(page, 'project-table-state');
+        await page.reload();
+
+        // Default sort is name asc; first 15 projects (00–14) should be on page 1.
+        await expect(page.getByText(prefix + '00')).toBeVisible({ timeout: 10000 });
+        await expect(page.getByRole('button', { name: 'Next Page' })).toBeVisible();
+        // Project 15 should be on page 2, not visible on page 1.
+        await expect(page.getByText(prefix + '15')).not.toBeVisible();
+
+        // Exactly 15 data rows should be mounted on page 1.
+        await expect(page.getByRole('row')).toHaveCount(15);
+
+        // Go to page 2.
+        await page.getByRole('button', { name: 'Next Page' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        await expect(page.getByText(prefix + '00')).not.toBeVisible();
+        // Page 2 contains the remaining 2 projects (15, 16).
+        await expect(page.getByRole('row')).toHaveCount(2);
+
+        // Return to page 1 via Previous Page.
+        await page.getByRole('button', { name: 'Previous Page' }).click();
+        await expect(page.getByText(prefix + '00')).toBeVisible();
+        await expect(page.getByText(prefix + '15')).not.toBeVisible();
+
+        // Jump to last page then back to first page.
+        await page.getByRole('button', { name: 'Last Page' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        await page.getByRole('button', { name: 'First Page' }).click();
+        await expect(page.getByText(prefix + '00')).toBeVisible();
+        await expect(page.getByText(prefix + '15')).not.toBeVisible();
+
+        // Direct page-number button navigation.
+        await page.getByRole('button', { name: 'Page 2' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        // Page 2 button should be marked as selected.
+        await expect(page.getByRole('button', { name: 'Page 2' })).toHaveAttribute(
+            'aria-current',
+            'page'
+        );
+    });
+
+    test('test that project pagination is not shown when there are 15 or fewer projects', async ({
+        page,
+        ctx,
+    }) => {
+        await Promise.all(
+            Array.from({ length: 10 }, (_, i) =>
+                createProjectViaApi(ctx, {
+                    name: `FewProj ${Math.floor(Math.random() * 100000)} ${i}`,
+                })
+            )
+        );
+
+        await goToProjectsOverview(page);
+        await clearTableState(page, 'project-table-state');
+        await page.reload();
+
+        await expect(page.getByTestId('project_table')).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Next Page' })).toHaveCount(0);
+    });
+
+    test('test that changing the sort resets pagination to page 1', async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const prefix = `SortPagProj ${seed} `;
+        await Promise.all(
+            Array.from({ length: 17 }, (_, i) =>
+                createProjectViaApi(ctx, { name: prefix + String(i).padStart(2, '0') })
+            )
+        );
+
+        await goToProjectsOverview(page);
+        await clearTableState(page, 'project-table-state');
+        await page.reload();
+
+        await expect(page.getByText(prefix + '00')).toBeVisible({ timeout: 10000 });
+
+        // Go to page 2.
+        await page.getByRole('button', { name: 'Next Page' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+
+        // Sort by name descending: header click toggles asc → desc.
+        const nameHeader = page
+            .locator('[data-testid="project_table"] .select-none', { hasText: 'Name' })
+            .first();
+        await nameHeader.click();
+
+        // After sorting, pagination resets to page 1; desc order → 16, 15, ... 02 visible.
+        await expect(page.getByText(prefix + '16')).toBeVisible();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        // Index 00 should now be on page 2 (last in desc order).
+        await expect(page.getByText(prefix + '00')).not.toBeVisible();
+    });
+});
+
+test('test that searching projects by name works', async ({ page, ctx }) => {
+    const suffix = Math.floor(1 + Math.random() * 10000);
+    const matchingProjectName = 'Searchable Project ' + suffix;
+    const otherProjectName = 'Unrelated Work ' + suffix;
+    await createProjectViaApi(ctx, { name: matchingProjectName });
+    await createProjectViaApi(ctx, { name: otherProjectName });
+
+    await goToProjectsOverview(page);
+    await clearTableState(page, 'project-table-state');
+    await page.reload();
+    await expect(page.getByText(matchingProjectName)).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText(otherProjectName)).toBeVisible();
+
+    const searchInput = page.getByRole('searchbox', { name: 'Search projects' });
+
+    // Searching is case insensitive and matches part of the name
+    await searchInput.fill('SEARCHABLE');
+    await expect(page.getByText(matchingProjectName)).toBeVisible();
+    await expect(page.getByText(otherProjectName)).not.toBeVisible();
+
+    // A term that matches nothing empties the table
+    await searchInput.fill('no project has this name');
+    await expect(page.getByText(matchingProjectName)).not.toBeVisible();
+    await expect(page.getByText(otherProjectName)).not.toBeVisible();
+    await expect(page.getByText('No matching projects')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Create your First Project' })).not.toBeVisible();
+
+    // Clearing the search restores both projects
+    await searchInput.fill('');
+    await expect(page.getByText(matchingProjectName)).toBeVisible();
+    await expect(page.getByText(otherProjectName)).toBeVisible();
 });

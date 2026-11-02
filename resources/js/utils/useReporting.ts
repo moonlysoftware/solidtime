@@ -7,8 +7,20 @@ import { useTasksQuery } from '@/utils/useTasksQuery';
 import { useClientsQuery } from '@/utils/useClientsQuery';
 import { useTagsQuery } from '@/utils/useTagsQuery';
 import { CheckCircleIcon, UserCircleIcon, UserGroupIcon } from '@heroicons/vue/20/solid';
-import { DocumentTextIcon, FolderIcon } from '@heroicons/vue/16/solid';
+import {
+    CalendarDaysIcon,
+    CalendarIcon,
+    DocumentTextIcon,
+    FolderIcon,
+} from '@heroicons/vue/16/solid';
+import { Coffee } from '@lucide/vue';
 import BillableIcon from '@/packages/ui/src/Icons/BillableIcon.vue';
+import {
+    type DateFormat,
+    formatDate,
+    formatMonth,
+    formatWeekRange,
+} from '@/packages/ui/src/utils/time';
 
 export type GroupingOption =
     | 'project'
@@ -17,7 +29,12 @@ export type GroupingOption =
     | 'billable'
     | 'client'
     | 'description'
-    | 'tag';
+    | 'tag'
+    | 'type'
+    | 'day'
+    | 'week'
+    | 'month'
+    | 'year';
 
 export const useReportingStore = defineStore('reporting', () => {
     // Cache query composables to avoid creating new subscriptions on every call
@@ -35,9 +52,14 @@ export const useReportingStore = defineStore('reporting', () => {
         client: 'No Client',
         description: 'No Description',
         tag: 'No Tag',
+        type: 'Work time',
     } as Record<string, string>;
 
-    function getNameForReportingRowEntry(key: string | null, type: string | null) {
+    function getNameForReportingRowEntry(
+        key: string | null,
+        type: string | null,
+        dateFormat?: DateFormat
+    ) {
         if (type === null) {
             return null;
         }
@@ -70,6 +92,19 @@ export const useReportingStore = defineStore('reporting', () => {
                 return 'Billable';
             }
         }
+        if (type === 'type') {
+            return key === 'break' ? 'Break' : 'Work time';
+        }
+        if (type === 'day') {
+            return formatDate(key, dateFormat);
+        }
+        if (type === 'week') {
+            return formatWeekRange(key, dateFormat);
+        }
+        if (type === 'month') {
+            return formatMonth(key);
+        }
+        // A `year` key is already a bare year, so it falls through unchanged.
         return key;
     }
 
@@ -104,6 +139,11 @@ export const useReportingStore = defineStore('reporting', () => {
             icon: BillableIcon,
         },
         {
+            label: 'Type',
+            value: 'type',
+            icon: Coffee,
+        },
+        {
             label: 'Description',
             value: 'description',
             icon: DocumentTextIcon,
@@ -112,6 +152,16 @@ export const useReportingStore = defineStore('reporting', () => {
             label: 'Tags',
             value: 'tag',
             icon: DocumentTextIcon,
+        },
+        {
+            label: 'Date',
+            value: 'day',
+            icon: CalendarIcon,
+        },
+        {
+            label: 'Week',
+            value: 'week',
+            icon: CalendarDaysIcon,
         },
     ];
 

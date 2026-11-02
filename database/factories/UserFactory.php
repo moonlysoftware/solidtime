@@ -9,6 +9,7 @@ use App\Enums\Weekday;
 use App\Models\Organization;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
+use Illuminate\Http\FileHelpers;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -27,6 +28,7 @@ class UserFactory extends Factory
         return [
             'name' => $this->faker->name(),
             'email' => $this->faker->unique()->safeEmail(),
+            'pending_email' => null,
             'email_verified_at' => now(),
             'password' => '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', // password
             'two_factor_secret' => null,
@@ -89,16 +91,31 @@ class UserFactory extends Factory
 
     public function withProfilePicture(): static
     {
-        $profilePhoto = $this->faker->image(null, 500, 500);
-        /** @see \Illuminate\Http\FileHelpers::hashName */
+        $profilePhoto = $this->generateProfilePhoto();
+        /** @see FileHelpers::hashName */
         $path = 'profile-photos/'.Str::random(40).'.png';
-        Storage::disk(config('jetstream.profile_photo_disk', 'public'))->put($path, $profilePhoto);
+        Storage::disk(config('filesystems.public'))->put($path, $profilePhoto);
 
         return $this->state(function (array $attributes) use ($path): array {
             return [
                 'profile_photo_path' => $path,
             ];
         });
+    }
+
+    /**
+     * Generates a PNG image with a random background color.
+     * Note: The image is generated locally, since downloading a placeholder image (Faker image()) depends on an external service.
+     */
+    private function generateProfilePhoto(): string
+    {
+        $image = imagecreatetruecolor(500, 500);
+        $color = imagecolorallocate($image, $this->faker->numberBetween(0, 255), $this->faker->numberBetween(0, 255), $this->faker->numberBetween(0, 255));
+        imagefill($image, 0, 0, $color);
+        ob_start();
+        imagepng($image);
+
+        return (string) ob_get_clean();
     }
 
     /**
@@ -118,7 +135,7 @@ class UserFactory extends Factory
 
             $organization->owner()->associate($user);
             $organization->users()->attach($user, ['role' => Role::Owner->value]);
-            $user->currentTeam()->associate($organization);
+            $user->currentOrganization()->associate($organization);
             $user->save();
         });
     }

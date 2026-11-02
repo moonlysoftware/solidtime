@@ -7,11 +7,54 @@ import {
     createPublicProjectViaApi,
     createTaskViaApi,
     createClientViaApi,
+    createTimeEntryViaApi,
     updateOrganizationSettingViaApi,
+    type TestContext,
 } from './utils/api';
+import { clearTableState, getTableRowNames } from './utils/table';
 
 async function goToProjectsOverview(page: Page) {
     await page.goto(PLAYWRIGHT_BASE_URL + '/projects');
+}
+
+async function createSortableTasks(ctx: TestContext) {
+    const project = await createProjectViaApi(ctx, { name: 'Task Sorting Project' });
+    const taskA = await createTaskViaApi(ctx, {
+        name: 'AAA Sorting Task',
+        project_id: project.id,
+        estimated_time: 36000,
+    });
+    const taskB = await createTaskViaApi(ctx, {
+        name: 'BBB Sorting Task',
+        project_id: project.id,
+        estimated_time: 14400,
+    });
+    const taskC = await createTaskViaApi(ctx, {
+        name: 'CCC Sorting Task',
+        project_id: project.id,
+    });
+
+    expect(taskA.estimated_time).toBe(36000);
+    expect(taskB.estimated_time).toBe(14400);
+    expect(taskC.estimated_time).toBeNull();
+
+    await createTimeEntryViaApi(ctx, {
+        duration: '1h',
+        projectId: project.id,
+        taskId: taskA.id,
+    });
+    await createTimeEntryViaApi(ctx, {
+        duration: '2h',
+        projectId: project.id,
+        taskId: taskB.id,
+    });
+    await createTimeEntryViaApi(ctx, {
+        duration: '3h',
+        projectId: project.id,
+        taskId: taskC.id,
+    });
+
+    return { project, taskA, taskB, taskC };
 }
 
 test('test that creating and deleting a new task in a new project works', async ({ page }) => {
@@ -152,6 +195,49 @@ test('test that editing a task name works', async ({ page, ctx }) => {
     await expect(page.getByTestId('task_table')).not.toContainText(originalTaskName);
 });
 
+test('test that the project can be searched and changed in the create task modal', async ({
+    page,
+    ctx,
+}) => {
+    const sourceProject = 'Source Project ' + Math.floor(1 + Math.random() * 100000);
+    const targetProject = 'Target Project ' + Math.floor(1 + Math.random() * 100000);
+    await createProjectViaApi(ctx, { name: sourceProject });
+    const target = await createProjectViaApi(ctx, { name: targetProject });
+
+    await goToProjectsOverview(page);
+    await page.getByText(sourceProject).first().click();
+    await page.getByRole('button', { name: 'Create Task' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    // The project dropdown is pre-filled with the source project; open it.
+    await page.getByRole('dialog').getByRole('button', { name: sourceProject }).click();
+
+    // Opening the dropdown focuses the search input; searching narrows it to the target project.
+    const projectSearch = page.getByPlaceholder('Search for a project...');
+    await expect(projectSearch).toBeFocused();
+    await projectSearch.fill('Target Project');
+    await page.getByRole('option', { name: targetProject }).click();
+
+    // Selecting closes the dropdown and updates the trigger to the chosen project.
+    await expect(
+        page.getByRole('dialog').getByRole('button', { name: targetProject })
+    ).toBeVisible();
+
+    // The new selection is what gets used when the task is created.
+    const taskName = 'Switched Task ' + Math.floor(1 + Math.random() * 100000);
+    await page.getByPlaceholder('Task Name').fill(taskName);
+    await Promise.all([
+        page.getByRole('dialog').getByRole('button', { name: 'Create Task' }).click(),
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/tasks') &&
+                response.request().method() === 'POST' &&
+                response.status() === 201 &&
+                (await response.json()).data.project_id === target.id
+        ),
+    ]);
+});
+
 test('test that creating a project with an existing client works', async ({ page, ctx }) => {
     const clientName = 'Existing Client ' + Math.floor(1 + Math.random() * 10000);
     const projectName = 'Project With Client ' + Math.floor(1 + Math.random() * 10000);
@@ -256,6 +342,59 @@ test('test that creating a new project from the task create modal project dropdo
     // Navigate to the new project's page and verify the task is there
     await page.goto(PLAYWRIGHT_BASE_URL + '/projects/' + newProjectId);
     await expect(page.getByTestId('task_table')).toContainText(newTaskName);
+});
+
+// =============================================
+// Sorting Tests
+// =============================================
+
+test('test that sorting tasks by name, total time and progress works', async ({ page, ctx }) => {
+    const { project, taskA, taskB, taskC } = await createSortableTasks(ctx);
+    await goToProjectsOverview(page);
+    await clearTableState(page, 'task-table-state');
+    await page.goto(PLAYWRIGHT_BASE_URL + '/projects/' + project.id);
+    const table = page.getByTestId('task_table');
+    await expect(table).toBeVisible();
+
+    // This project contains only the seeded tasks, so assert the complete order.
+    const expectOrder = async (expected: string[]) => {
+        await expect.poll(() => getTableRowNames(table)).toEqual(expected);
+    };
+    const clickHeader = async (headerText: string) => {
+        await table.getByText(headerText).first().click();
+    };
+
+    await expectOrder([taskA.name, taskB.name, taskC.name]);
+    await clickHeader('Task Name');
+    await expectOrder([taskC.name, taskB.name, taskA.name]);
+    await clickHeader('Task Name');
+    await expectOrder([taskA.name, taskB.name, taskC.name]);
+
+    await clickHeader('Total Time');
+    await expectOrder([taskC.name, taskB.name, taskA.name]);
+    await clickHeader('Total Time');
+    await expectOrder([taskA.name, taskB.name, taskC.name]);
+
+    await clickHeader('Progress');
+    await expectOrder([taskB.name, taskA.name, taskC.name]);
+    await clickHeader('Progress');
+    await expectOrder([taskA.name, taskB.name, taskC.name]);
+});
+
+test('test that task sort state persists after page reload', async ({ page, ctx }) => {
+    const { project, taskA, taskB, taskC } = await createSortableTasks(ctx);
+    await goToProjectsOverview(page);
+    await clearTableState(page, 'task-table-state');
+    await page.goto(PLAYWRIGHT_BASE_URL + '/projects/' + project.id);
+    const table = page.getByTestId('task_table');
+    await expect(table).toBeVisible();
+
+    await table.getByText('Progress').first().click();
+    await expect.poll(() => getTableRowNames(table)).toEqual([taskB.name, taskA.name, taskC.name]);
+    await page.reload();
+
+    // Verify the persisted row order, not just the sort indicator.
+    await expect.poll(() => getTableRowNames(table)).toEqual([taskB.name, taskA.name, taskC.name]);
 });
 
 // =============================================

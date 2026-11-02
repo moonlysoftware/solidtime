@@ -1,4 +1,4 @@
-import type { Locator } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 /**
  * Extract the first cell's text content from each row in a table.
@@ -13,4 +13,23 @@ export async function getTableRowNames(table: Locator): Promise<string[]> {
         if (text) names.push(text.trim());
     }
     return names;
+}
+
+/**
+ * The visual order of the given seeded names within the table, ignoring any other rows.
+ */
+export async function getSeededRowOrder(table: Locator, seeded: string[]): Promise<string[]> {
+    const rowNames = await getTableRowNames(table);
+    return rowNames
+        .map((rowName) => seeded.find((name) => rowName.includes(name)))
+        .filter((name): name is string => Boolean(name));
+}
+
+/**
+ * Drop a table's persisted sort/filter state so a test starts from the defaults.
+ */
+export async function clearTableState(page: Page, key: string) {
+    await page.evaluate((storageKey) => {
+        localStorage.removeItem(storageKey);
+    }, key);
 }

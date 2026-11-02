@@ -4,8 +4,7 @@ import AppLayout from '@/Layouts/AppLayout.vue';
 import { PlusIcon } from '@heroicons/vue/16/solid';
 import { UserGroupIcon } from '@heroicons/vue/20/solid';
 import SecondaryButton from '@/packages/ui/src/Buttons/SecondaryButton.vue';
-import TabBar from '@/Components/Common/TabBar/TabBar.vue';
-import TabBarItem from '@/Components/Common/TabBar/TabBarItem.vue';
+import { TabBar, TabBarItem } from '@/packages/ui/src';
 import { ref } from 'vue';
 import MemberTable from '@/Components/Common/Member/MemberTable.vue';
 import MemberInviteModal from '@/Components/Common/Member/MemberInviteModal.vue';
@@ -13,8 +12,8 @@ import type { Role } from '@/types/jetstream';
 import PageTitle from '@/Components/Common/PageTitle.vue';
 import InvitationTable from '@/Components/Common/Invitation/InvitationTable.vue';
 import { canCreateInvitations } from '@/utils/permissions';
-import { useStorage } from '@vueuse/core';
-import type { SortColumn, SortDirection } from '@/Components/Common/Member/MemberTable.vue';
+import { useTableSortState } from '@/utils/useTableSortState';
+import type { SortColumn } from '@/Components/Common/Member/MemberTable.vue';
 
 const inviteMember = ref(false);
 
@@ -24,25 +23,10 @@ defineProps<{
 
 const activeTab = ref<'all' | 'invitations'>('all');
 
-interface MemberTableState {
-    sortColumn: SortColumn;
-    sortDirection: SortDirection;
-}
-
-const tableState = useStorage<MemberTableState>(
-    'member-table-state',
-    {
-        sortColumn: 'name',
-        sortDirection: 'asc',
-    },
-    undefined,
-    { mergeDefaults: true }
-);
-
-function handleSort(column: SortColumn, direction: SortDirection) {
-    tableState.value.sortColumn = column;
-    tableState.value.sortDirection = direction;
-}
+const { tableState, handleSort } = useTableSortState<SortColumn>('member-table-state', {
+    sortColumn: 'name',
+    sortDirection: 'asc',
+});
 </script>
 
 <template>

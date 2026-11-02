@@ -11,6 +11,8 @@ use App\Enums\NumberFormat;
 use App\Enums\TimeFormat;
 use App\Http\Requests\V1\BaseFormRequest;
 use App\Models\Organization;
+use App\Rules\CurrencyRule;
+use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Validation\Rule;
 
 /**
@@ -21,7 +23,7 @@ class OrganizationUpdateRequest extends BaseFormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * @return array<string, array<string|\Illuminate\Contracts\Validation\Rule>>
+     * @return array<string, array<string|\Illuminate\Contracts\Validation\Rule|ValidationRule>>
      */
     public function rules(): array
     {
@@ -30,6 +32,11 @@ class OrganizationUpdateRequest extends BaseFormRequest
                 'string',
                 'max:255',
             ],
+            'currency' => [
+                'string',
+                new CurrencyRule,
+            ],
+            // Billable rate in cents per hour (example: 8000 means 80.00 in the organization's currency)
             'billable_rate' => array_merge(
                 [
                     'nullable',
@@ -43,6 +50,9 @@ class OrganizationUpdateRequest extends BaseFormRequest
                 'boolean',
             ],
             'prevent_overlapping_time_entries' => [
+                'boolean',
+            ],
+            'breaks_enabled' => [
                 'boolean',
             ],
             'number_format' => [
@@ -66,6 +76,11 @@ class OrganizationUpdateRequest extends BaseFormRequest
     public function getName(): ?string
     {
         return $this->has('name') ? (string) $this->input('name') : null;
+    }
+
+    public function getCurrency(): ?string
+    {
+        return $this->has('currency') ? (string) $this->input('currency') : null;
     }
 
     public function getNumberFormat(): ?NumberFormat
@@ -113,5 +128,10 @@ class OrganizationUpdateRequest extends BaseFormRequest
     public function getPreventOverlappingTimeEntries(): ?bool
     {
         return $this->has('prevent_overlapping_time_entries') ? $this->boolean('prevent_overlapping_time_entries') : null;
+    }
+
+    public function getBreaksEnabled(): ?bool
+    {
+        return $this->has('breaks_enabled') ? $this->boolean('breaks_enabled') : null;
     }
 }

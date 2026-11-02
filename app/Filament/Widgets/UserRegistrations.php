@@ -11,7 +11,7 @@ use Flowframe\Trend\TrendValue;
 
 class UserRegistrations extends ChartWidget
 {
-    protected static ?string $heading = 'User Registrations';
+    protected ?string $heading = 'User Registrations';
 
     public ?string $filter = 'week';
 
@@ -25,7 +25,7 @@ class UserRegistrations extends ChartWidget
         } elseif ($filter === 'month') {
             $start = now()->subMonth();
         } elseif ($filter === 'year') {
-            $start = now()->subYear();
+            $start = now()->subYear()->startOfMonth();
         } else {
             $start = now()->subWeek();
         }
@@ -54,7 +54,7 @@ class UserRegistrations extends ChartWidget
         return [
             'datasets' => [
                 [
-                    'label' => self::$heading,
+                    'label' => $this->heading,
                     'data' => $data->map(fn (TrendValue $value) => $value->aggregate),
                 ],
             ],

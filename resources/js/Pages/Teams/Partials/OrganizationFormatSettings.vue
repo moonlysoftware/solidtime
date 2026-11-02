@@ -1,18 +1,12 @@
 <script setup lang="ts">
 import FormSection from '@/Components/FormSection.vue';
 import PrimaryButton from '@/packages/ui/src/Buttons/PrimaryButton.vue';
-import { onMounted, ref } from 'vue';
-import { Field, FieldLabel } from '@/packages/ui/src/field';
+import { computed, onMounted, ref } from 'vue';
+import { Field, FieldDescription, FieldLabel } from '@/packages/ui/src/field';
 import type { UpdateOrganizationBody } from '@/packages/api/src';
 import { useOrganizationStore } from '@/utils/useOrganization';
 import { storeToRefs } from 'pinia';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/Components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/packages/ui/src';
 import { useMutation, useQueryClient } from '@tanstack/vue-query';
 import type { DateFormat, TimeFormat, IntervalFormat } from '@/packages/ui/src/utils/time';
 import type { CurrencyFormat } from '@/packages/ui/src/utils/money';
@@ -57,6 +51,12 @@ onMounted(async () => {
         };
     }
 });
+
+const showsHhMmSsInReports = computed(
+    () =>
+        form.value.interval_format === 'hours-minutes' ||
+        form.value.interval_format === 'hours-minutes-colon-separated'
+);
 
 async function submit() {
     mutation.mutate(form.value);
@@ -155,6 +155,12 @@ async function submit() {
                         >
                     </SelectContent>
                 </Select>
+                <FieldDescription v-if="showsHhMmSsInReports">
+                    Reports and totals shown next to cost use HH:MM:SS for this format, so the
+                    duration reconciles with the billable amount down to the second. Everywhere else
+                    (time tracker, calendar, entry rows) seconds are omitted and durations stay in
+                    your chosen format.
+                </FieldDescription>
             </Field>
         </template>
 

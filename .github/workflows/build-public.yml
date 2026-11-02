@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/build-public.yml'
+      - '.dockerignore'
       - 'docker/prod/**'
   workflow_dispatch:
 
@@ -36,7 +37,7 @@ jobs:
 
     steps:
       - name: "Check out code"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0 # Required for WyriHaximus/github-action-get-previous-tag
 
@@ -47,9 +48,9 @@ jobs:
       - name: "Get Previous tag (normal push)"
         id: previoustag
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: "WyriHaximus/github-action-get-previous-tag@v1"
+        uses: "WyriHaximus/github-action-get-previous-tag@v2"
         with:
-          prefix: "v"
+          pattern: "v*[0-9].*[0-9].*[0-9]"
 
       - name: "Get version"
         id: release-version
@@ -92,7 +93,7 @@ jobs:
         if: steps.cache-vendor.outputs.cache-hit != 'true' # Skip if cache hit
 
       - name: "Use Node.js"
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '20.x'
 
@@ -109,34 +110,34 @@ jobs:
 
       - name: "Docker meta"
         id: "meta"
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ${{ env.DOCKERHUB_REPO }}
             ${{ env.GHCR_REPO }}
 
       - name: "Login to Docker Hub Container Registry"
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: "Login to GitHub Container Registry"
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Set up QEMU"
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: "Set up Docker Buildx"
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: "Build and push by digest"
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/prod/Dockerfile
@@ -155,7 +156,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: "Upload digest"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ env.PLATFORM_PAIR }}
           path: ${{ runner.temp }}/digests/*
@@ -169,31 +170,31 @@ jobs:
       - build
     steps:
       - name: "Download digests"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: "Login to Docker Hub"
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: "Login to GHCR"
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Set up Docker Buildx"
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: "Docker meta"
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: |
             ${{ env.DOCKERHUB_REPO }}

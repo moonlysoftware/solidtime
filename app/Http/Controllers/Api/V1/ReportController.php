@@ -10,7 +10,6 @@ use App\Http\Requests\V1\Report\ReportStoreRequest;
 use App\Http\Requests\V1\Report\ReportUpdateRequest;
 use App\Http\Resources\V1\Report\DetailedReportResource;
 use App\Http\Resources\V1\Report\ReportCollection;
-use App\Http\Resources\V1\Report\ReportResource;
 use App\Models\Organization;
 use App\Models\Report;
 use App\Service\Dto\ReportPropertiesDto;
@@ -35,8 +34,6 @@ class ReportController extends Controller
     /**
      * Get reports
      *
-     * @return ReportCollection<ReportResource>
-     *
      * @throws AuthorizationException
      *
      * @operationId getReports
@@ -47,6 +44,7 @@ class ReportController extends Controller
 
         $reports = Report::query()
             ->orderBy('created_at', 'desc')
+            ->orderBy('id')
             ->whereBelongsTo($organization, 'organization')
             ->paginate(config('app.pagination_per_page_default'));
 
@@ -69,6 +67,8 @@ class ReportController extends Controller
 
     /**
      * Create report
+     *
+     * A report is a saved set of filters. Set `is_public` to `true` to share it: the response then contains the `shareable_link` that can be opened without logging in.
      *
      * @throws AuthorizationException
      *
@@ -96,6 +96,7 @@ class ReportController extends Controller
         $properties->setClientIds($request->input('properties.client_ids', null));
         $properties->setProjectIds($request->input('properties.project_ids', null));
         $properties->setTagIds($request->input('properties.tag_ids', null));
+        $properties->setTagMatchType($request->getPropertyTagMatchType());
         $properties->setTaskIds($request->input('properties.task_ids', null));
         $properties->weekStart = $request->has('properties.week_start') ? Weekday::from($request->input('properties.week_start')) : $user->week_start;
         $timezone = $user->timezone;
@@ -110,6 +111,7 @@ class ReportController extends Controller
         $properties->timezone = $timezone;
         $properties->roundingType = $request->getPropertyRoundingType();
         $properties->roundingMinutes = $request->getPropertyRoundingMinutes();
+        $properties->timeEntryType = $request->getPropertyTimeEntryType();
         $report->properties = $properties;
         if ($isPublic) {
             $report->share_secret = $reportService->generateSecret();

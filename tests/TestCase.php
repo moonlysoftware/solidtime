@@ -38,7 +38,7 @@ abstract class TestCase extends BaseTestCase
 
     protected function mockPrivateStorage(): void
     {
-        Storage::fake(config('filesystems.default'));
+        Storage::fake(config('filesystems.private'));
     }
 
     protected function mockPublicStorage(): void
@@ -50,6 +50,7 @@ abstract class TestCase extends BaseTestCase
     {
         // Note: It is necessary to clear the permission cache after each test, since the "scoped singletons" are not reset between tests.
         app(PermissionStore::class)->clear();
+        PermissionStore::resetCustomRoles();
         parent::tearDown();
     }
 
@@ -87,7 +88,9 @@ abstract class TestCase extends BaseTestCase
             $mock->shouldReceive('hasSubscription')->andReturn(true);
             $mock->shouldReceive('hasTrial')->andReturn(false);
             $mock->shouldReceive('getTrialUntil')->andReturn(null);
+            $mock->shouldReceive('getGoalLimit')->andReturn(null);
             $mock->shouldReceive('isBlocked')->andReturn(false);
+            $mock->shouldReceive('canUseBillableRates')->andReturn(true);
         });
     }
 
@@ -97,7 +100,21 @@ abstract class TestCase extends BaseTestCase
             $mock->shouldReceive('hasSubscription')->andReturn(false);
             $mock->shouldReceive('hasTrial')->andReturn(false);
             $mock->shouldReceive('getTrialUntil')->andReturn(null);
+            // Core has no goal limit, the limit of the free plan is implemented in the billing extension
+            $mock->shouldReceive('getGoalLimit')->andReturn(null);
             $mock->shouldReceive('isBlocked')->andReturn(false);
+            $mock->shouldReceive('canUseBillableRates')->andReturn(true);
+        });
+    }
+
+    protected function actAsOrganizationWithoutBillableRates(): void
+    {
+        $this->mock(BillingContract::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('hasSubscription')->andReturn(false);
+            $mock->shouldReceive('hasTrial')->andReturn(false);
+            $mock->shouldReceive('getTrialUntil')->andReturn(null);
+            $mock->shouldReceive('isBlocked')->andReturn(false);
+            $mock->shouldReceive('canUseBillableRates')->andReturn(false);
         });
     }
 }

@@ -3,7 +3,7 @@ import type { Page } from '@playwright/test';
 import { PLAYWRIGHT_BASE_URL } from '../playwright/config';
 import { test } from '../playwright/fixtures';
 import { createTagViaApi } from './utils/api';
-import { getTableRowNames } from './utils/table';
+import { clearTableState, getTableRowNames } from './utils/table';
 
 async function goToTagsOverview(page: Page) {
     await page.goto(PLAYWRIGHT_BASE_URL + '/tags');
@@ -91,21 +91,68 @@ test('test that multiple tags can be created via API and displayed in the table'
 });
 
 // =============================================
-// Sorting Tests
+// Context Menu Tests
 // =============================================
 
-async function clearTagTableState(page: Page) {
-    await page.evaluate(() => {
-        localStorage.removeItem('tag-table-state');
-    });
-}
+test('test that tag context menu edit updates the tag', async ({ page, ctx }) => {
+    const tagName = 'CtxEditTag ' + Math.floor(1 + Math.random() * 10000);
+    const updatedName = 'CtxUpdatedTag ' + Math.floor(1 + Math.random() * 10000);
+    await createTagViaApi(ctx, { name: tagName });
+    await goToTagsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: tagName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    await page.getByPlaceholder('Tag Name').fill(updatedName);
+    await Promise.all([
+        page.getByRole('button', { name: 'Update Tag' }).click(),
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/tags') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+    ]);
+
+    await expect(page.getByTestId('tag_table')).toContainText(updatedName);
+    await expect(page.getByTestId('tag_table')).not.toContainText(tagName);
+});
+
+test('test that tag context menu delete deletes the tag', async ({ page, ctx }) => {
+    const tagName = 'CtxDeleteTag ' + Math.floor(1 + Math.random() * 10000);
+    await createTagViaApi(ctx, { name: tagName });
+    await goToTagsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: tagName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/tags') &&
+                response.request().method() === 'DELETE' &&
+                response.status() === 204
+        ),
+        page.getByRole('menuitem', { name: 'Delete' }).click(),
+    ]);
+    await expect(page.getByTestId('tag_table')).not.toContainText(tagName);
+});
+
+// =============================================
+// Sorting Tests
+// =============================================
 
 test('test that sorting tags by name works', async ({ page, ctx }) => {
     await createTagViaApi(ctx, { name: 'AAA SortTag' });
     await createTagViaApi(ctx, { name: 'ZZZ SortTag' });
 
     await goToTagsOverview(page);
-    await clearTagTableState(page);
+    await clearTableState(page, 'tag-table-state');
     await page.reload();
 
     const table = page.getByTestId('tag_table');
@@ -123,7 +170,7 @@ test('test that sorting tags by name works', async ({ page, ctx }) => {
 
 test('test that tag sort state persists after page reload', async ({ page }) => {
     await goToTagsOverview(page);
-    await clearTagTableState(page);
+    await clearTableState(page, 'tag-table-state');
     await page.reload();
 
     const table = page.getByTestId('tag_table');

@@ -2,22 +2,22 @@
 import SecondaryButton from '@/packages/ui/src/Buttons/SecondaryButton.vue';
 import { UserCircleIcon } from '@heroicons/vue/24/solid';
 import { PlusIcon } from '@heroicons/vue/16/solid';
-import { type Component, computed, ref } from 'vue';
+import { type Component, computed, ref, watch } from 'vue';
 import { type Client } from '@/packages/api/src';
 import ClientTableRow from '@/Components/Common/Client/ClientTableRow.vue';
 import ClientCreateModal from '@/Components/Common/Client/ClientCreateModal.vue';
 import ClientTableHeading from '@/Components/Common/Client/ClientTableHeading.vue';
+import Pagination from '@/packages/ui/src/Pagination.vue';
 import { canCreateClients } from '@/utils/permissions';
 import { useProjectsQuery } from '@/utils/useProjectsQuery';
 import {
-    useVueTable,
-    getCoreRowModel,
-    getSortedRowModel,
-    type SortingState,
-} from '@tanstack/vue-table';
+    useSortableTable,
+    type SortableColumnDef,
+    type SortDirection,
+} from '@/utils/useSortableTable';
 
 export type SortColumn = 'name' | 'projects_count' | 'status';
-export type SortDirection = 'asc' | 'desc';
+export type { SortDirection } from '@/utils/useSortableTable';
 
 const props = defineProps<{
     clients: Client[];
@@ -43,14 +43,7 @@ const projectCountMap = computed(() => {
     return map;
 });
 
-const sorting = computed<SortingState>(() => [
-    {
-        id: props.sortColumn,
-        desc: props.sortDirection === 'desc',
-    },
-]);
-
-const columns = computed(() => [
+const columns = computed<SortableColumnDef<Client, SortColumn>[]>(() => [
     {
         id: 'name',
         accessorFn: (row: Client) => row.name.toLowerCase(),
@@ -66,39 +59,33 @@ const columns = computed(() => [
     },
 ]);
 
-const descFirstColumns = new Set<SortColumn>(
-    columns.value
-        .filter((c) => 'sortDescFirst' in c && c.sortDescFirst)
-        .map((c) => c.id as SortColumn)
-);
-
-function handleSort(column: SortColumn) {
-    if (props.sortColumn === column) {
-        emit('sort', column, props.sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-        emit('sort', column, descFirstColumns.has(column) ? 'desc' : 'asc');
-    }
-}
-
-const table = useVueTable({
-    get data() {
-        return props.clients;
-    },
-    get columns() {
-        return columns.value;
-    },
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    state: {
-        get sorting() {
-            return sorting.value;
-        },
-    },
-    manualSorting: false,
+const {
+    sortedRows: sortedClients,
+    descFirstColumns,
+    nextDirection,
+} = useSortableTable({
+    data: () => props.clients,
+    columns: () => columns.value,
+    sortColumn: () => props.sortColumn,
+    sortDirection: () => props.sortDirection,
+    tieBreakColumn: 'name',
 });
 
-const sortedClients = computed(() => {
-    return table.getRowModel().rows.map((row) => row.original);
+function handleSort(column: SortColumn) {
+    emit('sort', column, nextDirection(column));
+}
+
+// Client-side pagination: the full list is in memory, only one page is mounted at a time.
+const PAGE_SIZE = 15;
+const currentPage = ref(1);
+
+watch([() => props.sortColumn, () => props.sortDirection, () => props.clients], () => {
+    currentPage.value = 1;
+});
+
+const paginatedClients = computed(() => {
+    const start = (currentPage.value - 1) * PAGE_SIZE;
+    return sortedClients.value.slice(start, start + PAGE_SIZE);
 });
 </script>
 
@@ -126,10 +113,14 @@ const sortedClients = computed(() => {
                         >Create your First Client
                     </SecondaryButton>
                 </div>
-                <template v-for="client in sortedClients" :key="client.id">
+                <template v-for="client in paginatedClients" :key="client.id">
                     <ClientTableRow :client="client"></ClientTableRow>
                 </template>
             </div>
         </div>
     </div>
+    <Pagination
+        v-model:page="currentPage"
+        :total="sortedClients.length"
+        :items-per-page="PAGE_SIZE"></Pagination>
 </template>

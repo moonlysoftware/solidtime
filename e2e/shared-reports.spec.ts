@@ -1,6 +1,10 @@
 import { expect } from '@playwright/test';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
 import { PLAYWRIGHT_BASE_URL } from '../playwright/config';
 import { test } from '../playwright/fixtures';
+
+dayjs.extend(utc);
 import {
     createProjectViaApi,
     createClientViaApi,
@@ -11,6 +15,8 @@ import {
     createBillableProjectViaApi,
     createTimeEntryWithBillableStatusViaApi,
     createTagViaApi,
+    createReportViaApi,
+    updateOrganizationSettingViaApi,
 } from './utils/api';
 import {
     goToReporting,
@@ -61,6 +67,42 @@ test('test that saving a report creates a shared report and its shareable link s
     await expect(page.getByText('Reporting')).toBeVisible();
     await expect(page.getByText(projectName)).toBeVisible();
     await expect(page.getByText('Total')).toBeVisible();
+});
+
+test('test that a shared report grouped by date shows date labels formatted by the organization setting', async ({
+    page,
+    ctx,
+}) => {
+    const reportName = 'DateGroupReport ' + Math.floor(Math.random() * 10000);
+
+    await updateOrganizationSettingViaApi(ctx, { date_format: 'point-separated-d-m-yyyy' });
+    await createTimeEntryViaApi(ctx, {
+        description: 'Entry for date grouping',
+        duration: '1h',
+    });
+
+    await goToReporting(page);
+
+    // Switch the grouping to "Date"
+    const groupBySelects = page.locator('[data-testid="reporting_view"]').getByRole('combobox');
+    await groupBySelects.filter({ hasText: 'Project' }).first().click();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/time-entries/aggregate') &&
+                response.url().includes('group=day') &&
+                response.status() === 200
+        ),
+        page.getByRole('option', { name: 'Date', exact: true }).click(),
+    ]);
+
+    const { shareableLink } = await saveAsSharedReport(page, reportName);
+
+    // Verify row labels are formatted correctly
+    await page.goto(shareableLink);
+    await expect(page.getByText('Total')).toBeVisible();
+    await expect(page.getByText(/^\d{1,2}\.\d{1,2}\.\d{4}$/)).toBeVisible();
+    await expect(page.getByText(/^\d{4}-\d{2}-\d{2}$/)).toHaveCount(0);
 });
 
 test('test that shared report with invalid secret shows no data', async ({ page }) => {
@@ -287,8 +329,8 @@ test('test that shared report respects task filter', async ({ page, ctx }) => {
     await page.goto(shareableLink);
     await expect(page.getByText('Reporting')).toBeVisible();
     await expect(page.getByText('Total')).toBeVisible();
-    await expect(page.getByText('1h 00min').first()).toBeVisible();
-    await expect(page.getByText('3h 00min')).not.toBeVisible();
+    await expect(page.getByText('1:00:00').first()).toBeVisible();
+    await expect(page.getByText('3:00:00')).not.toBeVisible();
 });
 
 test('test that shared report respects client filter', async ({ page, ctx }) => {
@@ -364,8 +406,8 @@ test('test that shared report respects tag filter', async ({ page, ctx }) => {
     await page.goto(shareableLink);
     await expect(page.getByText('Reporting')).toBeVisible();
     await expect(page.getByText('Total')).toBeVisible();
-    await expect(page.getByText('1h 00min').first()).toBeVisible();
-    await expect(page.getByText('3h 00min')).not.toBeVisible();
+    await expect(page.getByText('1:00:00').first()).toBeVisible();
+    await expect(page.getByText('3:00:00')).not.toBeVisible();
 });
 
 test('test that shared report respects member filter', async ({ page, ctx }) => {
@@ -420,7 +462,7 @@ test('test that shared report with billable filter only shows billable entries',
     ]);
 
     // Verify only 1h shows before saving
-    await expect(page.getByTestId('reporting_view').getByText('1h 00min').first()).toBeVisible();
+    await expect(page.getByTestId('reporting_view').getByText('1:00:00').first()).toBeVisible();
 
     const { shareableLink } = await saveAsSharedReport(page, reportName);
 
@@ -430,8 +472,8 @@ test('test that shared report with billable filter only shows billable entries',
     await expect(page.getByText('Total')).toBeVisible();
 
     // Shared report should only show the 1h billable entry, not the 2h non-billable
-    await expect(page.getByText('1h 00min').first()).toBeVisible();
-    await expect(page.getByText('3h 00min')).not.toBeVisible();
+    await expect(page.getByText('1:00:00').first()).toBeVisible();
+    await expect(page.getByText('3:00:00')).not.toBeVisible();
 });
 
 // ──────────────────────────────────────────────────
@@ -464,7 +506,7 @@ test('test that creating a report with an expiration date works', async ({ page,
     await datePicker.click();
 
     // Select a date in the next month
-    const calendarGrid = page.getByRole('grid');
+    const calendarGrid = page.getByRole('gridcell').first();
     await expect(calendarGrid).toBeVisible({ timeout: 5000 });
     await page.getByRole('button', { name: /Next/i }).click();
     await page.getByRole('gridcell').filter({ hasText: /^15$/ }).first().click();
@@ -542,7 +584,7 @@ test('test that editing a report to make it public with expiration date works', 
     await datePicker.click();
 
     // Select a date in the next month
-    const calendarGrid = page.getByRole('grid');
+    const calendarGrid = page.getByRole('gridcell').first();
     await expect(calendarGrid).toBeVisible({ timeout: 5000 });
     await page.getByRole('button', { name: /Next/i }).click();
     await page.getByRole('gridcell').filter({ hasText: /^20$/ }).first().click();
@@ -736,7 +778,7 @@ test('test that updating expiration date on already-public report works', async 
     await datePicker.click();
 
     // Select the 25th of next month
-    const calendarGrid = page.getByRole('grid');
+    const calendarGrid = page.getByRole('gridcell').first();
     await expect(calendarGrid).toBeVisible({ timeout: 5000 });
     await page.getByRole('button', { name: /Next/i }).click();
     await page.getByRole('gridcell').filter({ hasText: /^25$/ }).first().click();
@@ -764,6 +806,97 @@ test('test that updating expiration date on already-public report works', async 
     // The returned date should be in the future
     const now = new Date();
     expect(returnedDate.getTime()).toBeGreaterThan(now.getTime());
+});
+
+test('test that clearing the expiration date on a report works', async ({ page, ctx }) => {
+    const reportName = 'ClearExpReport ' + Math.floor(Math.random() * 10000);
+
+    // Create a public report with an expiration date via API
+    await createReportViaApi(ctx, {
+        name: reportName,
+        is_public: true,
+        public_until: dayjs().add(1, 'month').utc().format('YYYY-MM-DDTHH:mm:ss[Z]'),
+    });
+
+    // Go to shared reports and edit the report
+    await goToReportingShared(page);
+    await expect(page.getByText(reportName)).toBeVisible();
+
+    await page
+        .getByRole('button', { name: new RegExp('Actions for Project ' + reportName) })
+        .click();
+    await page.getByRole('menuitem', { name: /^Edit Report/ }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    // The date picker should show a date (not "Pick a date")
+    await expect(
+        page.getByRole('dialog').getByRole('button', { name: 'Pick a date' })
+    ).not.toBeVisible();
+
+    // Click the clear button (X icon) to remove the expiration date
+    const clearButton = page
+        .getByRole('dialog')
+        .locator('[role="button"]')
+        .filter({ has: page.locator('svg.lucide-x') });
+    await expect(clearButton).toBeVisible();
+    await clearButton.click();
+
+    // The date picker should now show "Pick a date"
+    await expect(
+        page.getByRole('dialog').getByRole('button', { name: 'Pick a date' })
+    ).toBeVisible();
+
+    // The clear button should no longer be visible
+    await expect(clearButton).not.toBeVisible();
+
+    // Update the report and verify public_until is null
+    const [updateResponse] = await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/reports/') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+        page.getByRole('button', { name: 'Update Report' }).click(),
+    ]);
+    const updateBody = await updateResponse.json();
+    expect(updateBody.data.public_until).toBeNull();
+});
+
+test('test that date picker clear button is not visible when no date is set', async ({
+    page,
+    ctx,
+}) => {
+    const reportName = 'NoClearReport ' + Math.floor(Math.random() * 10000);
+
+    // Create a public report without an expiration date via API
+    await createReportViaApi(ctx, {
+        name: reportName,
+        is_public: true,
+        public_until: null,
+    });
+
+    // Go to shared reports and edit the report
+    await goToReportingShared(page);
+    await expect(page.getByText(reportName)).toBeVisible();
+
+    await page
+        .getByRole('button', { name: new RegExp('Actions for Project ' + reportName) })
+        .click();
+    await page.getByRole('menuitem', { name: /^Edit Report/ }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    // The date picker should show "Pick a date"
+    await expect(
+        page.getByRole('dialog').getByRole('button', { name: 'Pick a date' })
+    ).toBeVisible();
+
+    // The clear button should NOT be visible
+    const clearButton = page
+        .getByRole('dialog')
+        .locator('[role="button"]')
+        .filter({ has: page.locator('svg.lucide-x') });
+    await expect(clearButton).not.toBeVisible();
 });
 
 // ──────────────────────────────────────────────────

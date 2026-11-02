@@ -10,11 +10,12 @@ import { useFocus } from '@vueuse/core';
 import ClientDropdown from '@/packages/ui/src/Client/ClientDropdown.vue';
 import ProjectColorSelector from '@/packages/ui/src/Project/ProjectColorSelector.vue';
 import { Button } from '@/packages/ui/src/Buttons';
-import { ChevronDown } from 'lucide-vue-next';
+import { ChevronDown } from '@lucide/vue';
 import { UserCircleIcon } from '@heroicons/vue/20/solid';
 import EstimatedTimeSection from '@/packages/ui/src/EstimatedTimeSection.vue';
 import { Field, FieldGroup, FieldLabel } from '../field';
 import ProjectEditBillableSection from '@/packages/ui/src/Project/ProjectEditBillableSection.vue';
+import ProjectVisibilitySelect from '@/packages/ui/src/Project/ProjectVisibilitySelect.vue';
 import type { Client } from '@/packages/api/src';
 
 const show = defineModel('show', { default: false });
@@ -26,6 +27,8 @@ const props = defineProps<{
     createClient: (client: CreateClientBody) => Promise<Client | undefined>;
     currency: string;
     enableEstimatedTime: boolean;
+    organizationBillableRate: number | null;
+    initialProjectName?: string;
 }>();
 
 const activeClients = computed(() => {
@@ -33,12 +36,13 @@ const activeClients = computed(() => {
 });
 
 const project = ref<CreateProjectBody>({
-    name: '',
+    name: props.initialProjectName ?? '',
     color: getRandomColor(),
     client_id: null,
     billable_rate: null,
     is_billable: false,
     estimated_time: null,
+    is_public: false,
 });
 
 async function submit() {
@@ -51,6 +55,7 @@ async function submit() {
         billable_rate: null,
         is_billable: false,
         estimated_time: null,
+        is_public: false,
     };
 }
 
@@ -67,7 +72,7 @@ const currentClientName = computed(() => {
 </script>
 
 <template>
-    <DialogModal closeable :show="show" @close="show = false">
+    <DialogModal closeable :show="show" @close="show = false" @submit="submit">
         <template #title>
             <div class="flex space-x-2">
                 <span> Create Project </span>
@@ -113,11 +118,15 @@ const currentClientName = computed(() => {
                 <ProjectEditBillableSection
                     v-model:is-billable="project.is_billable"
                     v-model:billable-rate="project.billable_rate"
-                    :currency="currency"></ProjectEditBillableSection>
+                    :currency="currency"
+                    :organization-billable-rate="
+                        organizationBillableRate
+                    "></ProjectEditBillableSection>
                 <EstimatedTimeSection
                     v-if="enableEstimatedTime"
                     v-model="project.estimated_time"
                     @submit="submit()"></EstimatedTimeSection>
+                <ProjectVisibilitySelect v-model="project.is_public"></ProjectVisibilitySelect>
             </FieldGroup>
         </template>
         <template #footer>

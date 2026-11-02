@@ -9,10 +9,11 @@ use App\Models\Concerns\HasUuids;
 use Database\Factories\MemberFactory;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Support\Carbon;
-use Laravel\Jetstream\Membership as JetstreamMembership;
 use OwenIt\Auditing\Contracts\Auditable as AuditableContract;
 
 /**
@@ -27,10 +28,11 @@ use OwenIt\Auditing\Contracts\Auditable as AuditableContract;
  * @property-read User $user
  * @property-read Collection<int, ProjectMember> $projectMembers
  * @property-read Collection<int, TimeEntry> $timeEntries
+ * @property-read Collection<int, Goal> $goals
  *
  * @method static MemberFactory factory()
  */
-class Member extends JetstreamMembership implements AuditableContract
+class Member extends Pivot implements AuditableContract
 {
     use CustomAuditable;
 
@@ -76,5 +78,15 @@ class Member extends JetstreamMembership implements AuditableContract
     public function projectMembers(): HasMany
     {
         return $this->hasMany(ProjectMember::class, 'member_id');
+    }
+
+    /**
+     * Goals whose progress counts the time entries of this member.
+     *
+     * @return HasMany<Goal, $this>
+     */
+    public function goals(): HasMany
+    {
+        return $this->hasMany(Goal::class, 'member_id');
     }
 }

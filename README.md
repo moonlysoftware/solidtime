@@ -1,4 +1,4 @@
-# solidtime - The modern Open-Source Time Tracker
+# solidtime - The modern Open-Source TimeTracker
 
 [![GitHub License](https://img.shields.io/github/license/solidtime-io/solidtime?style=flat-square)](https://github.com/solidtime-io/solidtime/blob/main/LICENSE.md)
 [![Codecov](https://img.shields.io/codecov/c/github/solidtime-io/solidtime?style=flat-square&logo=codecov)](https://codecov.io/gh/solidtime-io/solidtime)
@@ -30,12 +30,24 @@ If you do not want to self-host solidtime or try it out you can sign up for [sol
 
 ## Issues & Feature Requests
 
-If you find any **bugs in solidtime**, please feel free to [**open an issue**](https://github.com/solidtime-io/solidtime/issues/new) in this repository, with instructions on how to reproduce the bug. 
-If you have a **feature request**, please [**create a discussion**](https://github.com/solidtime-io/solidtime/discussions/new?category=feature-requests) in this repository.
+If you 
+* find any **bugs in solidtime**, please feel free to [**open an issue**](https://github.com/solidtime-io/solidtime/issues/new) in this repository, with instructions on how to reproduce the bug. 
+* have a **feature request**, please [**create a discussion**](https://github.com/solidtime-io/solidtime/discussions/new?category=feature-requests) in this repository.
+
+
+> **Do not use AI-generated text in issues, discussions and PR descriptions.**
+>
+> We are human, so please write in natural language in your issues, discussions, and PR descriptions.
+> Don't be a meatproxy. We will ban people who repeatedly violate this rule from further communication on our repositories.
+
 
 ## Contributing
 
 Please open an issue or start a discussion and wait for approval before submitting a pull request. This does not apply to tiny fixes or changes however, please keep in mind that we might not merge PRs for various reasons. 
+
+**If you submit an AI slop pull request (especially without following the proper procedure), you will be banned from future contributions to solidtime.**
+
+To keep that manageable, pull requests from authors who are not vouched are closed automatically, unless they change 50 lines or fewer. To get vouched, open an issue or discussion first and explain how you intend to implement the change. Once we have agreed on the approach, we vouch for you. See [Vouched contributors](./CONTRIBUTING.md#vouched-contributors).
 
 Please read the [CONTRIBUTING.md](./CONTRIBUTING.md) before sumbitting a Pull Request.
 

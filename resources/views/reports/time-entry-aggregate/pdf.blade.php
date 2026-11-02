@@ -150,7 +150,7 @@
         <div style="padding: 8px 12px; border-radius: 8px;">
             <div style="color: #71717a; font-weight: 600;">Duration</div>
             <div
-                style="font-size: 24px; font-weight: 500; margin-top: 2px;">{{ $localization->formatInterval(CarbonInterval::seconds($aggregatedData['seconds'])) }} </div>
+                style="font-size: 24px; font-weight: 500; margin-top: 2px;">{{ $localization->formatIntervalForReporting(CarbonInterval::seconds($aggregatedData['seconds'])) }} </div>
         </div>
         @if($showBillableRate)
         <div style="padding: 8px 12px; border-radius: 8px;">
@@ -194,12 +194,12 @@
                                 @if($group->is(\App\Enums\TimeEntryAggregationType::Billable))
                                     {{ $group1Entry['key'] === '1' ? 'Billable' : 'Non-billable' }}
                                 @else
-                                    {{ $group1Entry['description'] ?? $group1Entry['key'] ?? 'No '.Str::lower($group->description()) }}
+                                    {{ $group1Entry['description'] ?? $localization->formatTimeGroupKey($group1Entry['key'], $group) ?? 'No '.Str::lower($group->description()) }}
                                 @endif
                             </span>
                         </td>
                         <td style="text-align: left;">
-                            {{ $localization->formatInterval(CarbonInterval::seconds($group1Entry['seconds'])) }}
+                            {{ $localization->formatIntervalForReporting(CarbonInterval::seconds($group1Entry['seconds'])) }}
                         </td>
                         @if($showBillableRate)
                         <td style="text-align: right;">
@@ -214,7 +214,7 @@
                         Total
                     </td>
                     <td style="font-weight: 500;color: #18181b;">
-                        {{ $localization->formatInterval(CarbonInterval::seconds($aggregatedData['seconds'])) }}
+                        {{ $localization->formatIntervalForReporting(CarbonInterval::seconds($aggregatedData['seconds'])) }}
                     </td>
                     @if($showBillableRate)
                     <td style="text-align: right; font-weight: 500;color: #18181b;">
@@ -239,7 +239,7 @@
                 <span style="color: #a1a1aa;">
                     {{ $group->description() }}:
                     </span>
-                {{ $group1Entry['description'] ?? $group1Entry['key'] ?? 'No '.Str::lower($group->description()) }}
+                {{ $group1Entry['description'] ?? $localization->formatTimeGroupKey($group1Entry['key'], $group) ?? 'No '.Str::lower($group->description()) }}
             @endif
         </h2>
 
@@ -278,11 +278,11 @@
                             @if($subGroup->is(\App\Enums\TimeEntryAggregationType::Billable))
                                 {{ $group2Entry['key'] === '1' ? 'Billable' : 'Non-billable' }}
                             @else
-                                {{ $group2Entry['description'] ?? $group2Entry['key'] ?? '-' }}
+                                {{ $group2Entry['description'] ?? $localization->formatTimeGroupKey($group2Entry['key'], $subGroup) ?? '-' }}
                             @endif
                         </td>
                         <td>
-                            {{ $localization->formatInterval($duration) }}
+                            {{ $localization->formatIntervalForReporting($duration) }}
                         </td>
                         <td>
                             {{ $localization->formatNumber($duration->totalHours) }}
@@ -318,7 +318,7 @@
 
         series: [
             {
-                data: {!! json_encode(collect($aggregatedData['grouped_data'])->map(function (array $data) use (&$colorService, $group): object {
+                data: {!! json_encode(collect($aggregatedData['grouped_data'])->map(function (array $data) use (&$colorService, $group, $localization): object {
                     $color = $data['color'];
                     if ($color === null) {
                         $color = $colorService->getRandomColor($data['key']);
@@ -328,7 +328,7 @@
                     }
                     return (object)[
                         'value' => $data['seconds'],
-                        'name' => $data['description'] ?? $data['key'] ?? 'No '.Str::lower($group->description()),
+                        'name' => $data['description'] ?? $localization->formatTimeGroupKey($data['key'], $group) ?? 'No '.Str::lower($group->description()),
                         'color' => $color,
                         'itemStyle' => (object) [
                             'color' => $color,
@@ -403,7 +403,7 @@
                 type: "bar",
                 data: {!! json_encode(collect($dataHistoryChart['grouped_data'])->map(fn($value) => (object) [
                             'value' => $value['seconds'],
-                            'name' => ((int) $value['seconds']) === 0 ? '' : $localization->formatInterval(CarbonInterval::seconds((int) $value['seconds']))
+                            'name' => ((int) $value['seconds']) === 0 ? '' : $localization->formatIntervalForReporting(CarbonInterval::seconds((int) $value['seconds']))
                         ])->toArray()) !!},
                 itemStyle: {
                     borderColor: "#7dd3fc",

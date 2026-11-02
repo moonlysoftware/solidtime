@@ -14,6 +14,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use League\Csv\Exception as CsvException;
 use League\Csv\Reader;
+use Override;
 
 class GenericTimeEntriesImporter extends DefaultImporter
 {
@@ -59,7 +60,7 @@ class GenericTimeEntriesImporter extends DefaultImporter
     /**
      * @throws ImportException
      */
-    #[\Override]
+    #[Override]
     public function importData(string $data, string $timezone): void
     {
         try {
@@ -113,6 +114,7 @@ class GenericTimeEntriesImporter extends DefaultImporter
                 }
                 $taskId = null;
                 if ($record['task'] !== '') {
+                    $this->checkTaskNameLength($record['task']);
                     $taskId = $this->taskImportHelper->getKey([
                         'name' => $record['task'],
                         'project_id' => $projectId,
@@ -132,7 +134,7 @@ class GenericTimeEntriesImporter extends DefaultImporter
                 if (! in_array($record['billable'], ['true', 'false'], true)) {
                     throw new ImportException('Invalid billable value');
                 }
-                $timeEntry->billable = $record['billable'] === 'true';
+                $timeEntry->billable = $this->canUseBillableRates && $record['billable'] === 'true';
                 $timeEntry->tags = $this->getTags($record['tags']);
                 $timeEntry->is_imported = true;
                 try {
@@ -152,6 +154,9 @@ class GenericTimeEntriesImporter extends DefaultImporter
                 }
                 if ($end === null) {
                     throw new ImportException('Value of end ("'.$record['end'].'") is invalid');
+                }
+                if ($end->lt($start)) {
+                    throw new ImportException('Value of end ("'.$record['end'].'") is before start ("'.$record['start'].'")');
                 }
                 $timeEntry->end = $end->utc();
                 $timeEntry->billable_rate = $this->billableRateService->getBillableRateForTimeEntryWithGivenRelations(
@@ -194,13 +199,13 @@ class GenericTimeEntriesImporter extends DefaultImporter
         }
     }
 
-    #[\Override]
+    #[Override]
     public function getName(): string
     {
         return __('importer.generic_time_entries.name');
     }
 
-    #[\Override]
+    #[Override]
     public function getDescription(): string
     {
         return __('importer.generic_time_entries.description');

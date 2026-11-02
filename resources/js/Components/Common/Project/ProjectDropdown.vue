@@ -9,10 +9,10 @@ import {
     ComboboxItem,
     ComboboxRoot,
     ComboboxViewport,
-} from 'radix-vue';
-import { Check, Plus } from 'lucide-vue-next';
+    ComboboxVirtualizer,
+} from 'reka-ui';
+import { Check, Plus } from '@lucide/vue';
 import type { CreateClientBody, CreateProjectBody, Project } from '@/packages/api/src';
-import { UseFocusTrap } from '@vueuse/integrations/useFocusTrap/component';
 import ProjectCreateModal from '@/packages/ui/src/Project/ProjectCreateModal.vue';
 import { useProjectsStore } from '@/utils/useProjects';
 import { useClientsStore } from '@/utils/useClients';
@@ -20,7 +20,10 @@ import { useClientsQuery } from '@/utils/useClientsQuery';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 import { canCreateProjects } from '@/utils/permissions';
+import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
+import { getCurrentOrganizationId } from '@/utils/useUser';
 
+const { organization } = useOrganizationQuery(getCurrentOrganizationId()!);
 const searchValue = ref('');
 const searchInput = ref<HTMLElement | null>(null);
 const model = defineModel<string | null>({
@@ -34,7 +37,16 @@ const emit = defineEmits(['update:modelValue', 'changed']);
 
 const activeClients = computed(() => clients.value.filter((c) => !c.is_archived));
 
-const sortedProjects = ref<Project[]>([]);
+// Pinned on open so rows don't re-sort while interacting; the project list itself stays reactive.
+const pinnedProjectId = ref<string | null>(null);
+
+const sortedProjects = computed(() => {
+    return [...projects.value].sort((a, b) => {
+        const aPinned = pinnedProjectId.value === a.id ? 0 : 1;
+        const bPinned = pinnedProjectId.value === b.id ? 0 : 1;
+        return aPinned - bPinned;
+    });
+});
 
 const shownProjects = computed(() => {
     return sortedProjects.value.filter((project) => {
@@ -62,9 +74,7 @@ watch(open, (isOpen) => {
             searchInput.value?.$el?.focus();
         });
 
-        sortedProjects.value = [...projects.value].sort((iteratingProject) => {
-            return model.value === iteratingProject.id ? -1 : 1;
-        });
+        pinnedProjectId.value = model.value;
     }
 });
 
@@ -100,40 +110,51 @@ function updateValue(project: Project) {
         </template>
 
         <template #content>
-            <UseFocusTrap v-if="open" :options="{ immediate: true, allowOutsideClick: true }">
+            <!-- kept open so the list stays visible during the popover close animation -->
+            <div>
                 <ComboboxRoot
-                    v-model:search-term="searchValue"
-                    v-model:open="open"
+                    :open="true"
                     :model-value="currentProject"
                     class="relative"
-                    @update:model-value="updateValue">
+                    :ignore-filter="true"
+                    @update:model-value="updateValue"
+                    @update:open="
+                        (value: boolean) => {
+                            if (!value) open = false;
+                        }
+                    ">
                     <ComboboxAnchor>
                         <ComboboxInput
                             ref="searchInput"
+                            v-model="searchValue"
                             class="bg-transparent border-0 placeholder-muted-foreground text-sm text-popover-foreground py-2 px-3 focus:ring-0 border-b border-popover-border focus:border-popover-border w-full"
                             placeholder="Search for a project..." />
                     </ComboboxAnchor>
                     <ComboboxContent>
                         <ComboboxViewport
                             class="w-[--reka-popper-anchor-width] max-h-60 overflow-y-scroll p-1">
-                            <ComboboxItem
-                                v-for="project in shownProjects"
-                                :key="project.id"
-                                :value="project"
-                                class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
-                                :data-project-id="project.id">
-                                <span class="flex items-center gap-2">
+                            <ComboboxVirtualizer
+                                v-slot="{ option: project }"
+                                :options="shownProjects"
+                                :estimate-size="32"
+                                :text-content="(p: Project) => p.name">
+                                <ComboboxItem
+                                    :value="project"
+                                    class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground"
+                                    :data-project-id="project.id">
+                                    <span class="flex min-w-0 flex-1 items-center gap-2">
+                                        <span
+                                            :style="{ backgroundColor: project.color }"
+                                            class="w-3 h-3 rounded-full shrink-0"></span>
+                                        <span class="truncate">{{ project.name }}</span>
+                                    </span>
                                     <span
-                                        :style="{ backgroundColor: project.color }"
-                                        class="w-3 h-3 rounded-full shrink-0"></span>
-                                    <span>{{ project.name }}</span>
-                                </span>
-                                <span
-                                    v-if="isProjectSelected(project)"
-                                    class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
-                                    <Check class="h-4 w-4" />
-                                </span>
-                            </ComboboxItem>
+                                        v-if="isProjectSelected(project)"
+                                        class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
+                                        <Check class="h-4 w-4" />
+                                    </span>
+                                </ComboboxItem>
+                            </ComboboxVirtualizer>
                         </ComboboxViewport>
                         <div
                             v-if="canCreateProjects()"
@@ -147,7 +168,7 @@ function updateValue(project: Project) {
                         </div>
                     </ComboboxContent>
                 </ComboboxRoot>
-            </UseFocusTrap>
+            </div>
         </template>
     </Dropdown>
     <ProjectCreateModal
@@ -156,6 +177,7 @@ function updateValue(project: Project) {
         :create-client="handleCreateClient"
         :clients="activeClients"
         :currency="getOrganizationCurrencyString()"
+        :organization-billable-rate="organization?.billable_rate ?? null"
         :enable-estimated-time="isAllowedToPerformPremiumAction()" />
 </template>
 

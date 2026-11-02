@@ -1,8 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { test as baseTest } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { PLAYWRIGHT_BASE_URL, TEST_USER_PASSWORD } from './config';
 import { type TestContext, setupTestContext } from '../e2e/utils/api';
 import { setupAdminUser, setupEmployeeUser } from '../e2e/utils/members';
+import { loginAsSuperAdmin } from '../e2e/utils/admin';
 
 export * from '@playwright/test';
 export type { TestContext };
@@ -32,6 +35,9 @@ export const test = baseTest.extend<
         const email = `john+${Date.now()}_${Math.floor(Math.random() * 10000)}@doe.com`;
         const password = TEST_USER_PASSWORD;
         const name = 'John Doe';
+        const timezone = await page.evaluate(
+            () => Intl.DateTimeFormat().resolvedOptions().timeZone
+        );
 
         // Use page.context().request() so cookies are automatically shared with the page
         const request = page.context().request;
@@ -64,6 +70,7 @@ export const test = baseTest.extend<
                 password,
                 password_confirmation: password,
                 terms: 'on',
+                timezone,
             },
             maxRedirects: 0,
         });
@@ -111,4 +118,34 @@ export const test = baseTest.extend<
         await use({ page: adminPage, memberId: adminMemberId });
         await closeAdmin();
     },
+});
+
+/**
+ * Authentication fixture for the Filament admin panel.
+ *
+ * The admin panel can only be accessed by the seeded super admin user, so the
+ * throwaway users of the default fixture cannot be used. Logging in is rate
+ * limited (5 attempts per minute and email address), therefore the session is
+ * created once per worker and reused by all tests of that worker.
+ */
+export const adminTest = baseTest.extend<object, { adminStorageState: string }>({
+    adminStorageState: [
+        async ({ browser }, use, workerInfo) => {
+            const fileName = path.resolve(
+                workerInfo.project.outputDir,
+                `.auth/admin-${workerInfo.workerIndex}.json`
+            );
+
+            if (!fs.existsSync(fileName)) {
+                const context = await browser.newContext({ storageState: undefined });
+                await loginAsSuperAdmin(await context.newPage());
+                await context.storageState({ path: fileName });
+                await context.close();
+            }
+
+            await use(fileName);
+        },
+        { scope: 'worker' },
+    ],
+    storageState: ({ adminStorageState }, use) => use(adminStorageState),
 });

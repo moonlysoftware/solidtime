@@ -5,27 +5,45 @@ declare(strict_types=1);
 namespace App\Service;
 
 use App\Enums\Role;
+use App\Events\OrganizationInvitationAdding;
 use App\Exceptions\Api\InvitationForTheEmailAlreadyExistsApiException;
 use App\Exceptions\Api\UserIsAlreadyMemberOfOrganizationApiException;
 use App\Mail\OrganizationInvitationMail;
-use App\Models\Member;
 use App\Models\Organization;
 use App\Models\OrganizationInvitation;
+use App\Models\User;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Laravel\Jetstream\Events\InvitingTeamMember;
 
 class InvitationService
 {
+    public function hasAcceptedInvitationForEmail(string $email): bool
+    {
+        return OrganizationInvitation::query()
+            ->whereRaw('lower(email) = ?', [strtolower($email)])
+            ->whereNotNull('accepted_at')
+            ->exists();
+    }
+
+    public function hasPendingInvitationForEmail(string $email): bool
+    {
+        return OrganizationInvitation::query()
+            ->whereRaw('lower(email) = ?', [strtolower($email)])
+            ->whereNull('accepted_at')
+            ->exists();
+    }
+
     /**
      * @throws UserIsAlreadyMemberOfOrganizationApiException|InvitationForTheEmailAlreadyExistsApiException
      */
-    public function inviteUser(Organization $organization, string $email, Role $role): OrganizationInvitation
+    public function inviteUser(Organization $organization, string $email, Role $role, User $inviter): OrganizationInvitation
     {
-        if (Member::query()
-            ->whereBelongsTo($organization, 'organization')
-            ->whereRelation('user', 'email', '=', $email)
-            ->where('role', '!=', Role::Placeholder->value)
-            ->exists()) {
+        // Normalize the email so it matches how user emails are stored (see UserService::createUser),
+        // otherwise a mixed-case invite silently fails to link on registration.
+        $email = strtolower($email);
+
+        if (app(MemberService::class)->isEmailAlreadyMember($organization, $email)) {
             throw new UserIsAlreadyMemberOfOrganizationApiException;
         }
 
@@ -36,7 +54,7 @@ class InvitationService
             throw new InvitationForTheEmailAlreadyExistsApiException;
         }
 
-        InvitingTeamMember::dispatch($organization, $email, $role->value);
+        OrganizationInvitationAdding::dispatch($organization, $email, $role, $inviter);
 
         $invitation = new OrganizationInvitation;
         $invitation->email = $email;
@@ -47,5 +65,38 @@ class InvitationService
         Mail::to($email)->queue(new OrganizationInvitationMail($invitation));
 
         return $invitation;
+    }
+
+    /**
+     * @return Collection<int, Organization>
+     */
+    public function processAcceptedInvitations(User $user): Collection
+    {
+        $organizations = new Collection;
+
+        $invitations = OrganizationInvitation::query()
+            ->whereRaw('lower(email) = ?', [strtolower($user->email)])
+            ->whereNotNull('accepted_at')
+            ->get();
+
+        foreach ($invitations as $invitation) {
+            $organization = $invitation->organization;
+            $role = Role::tryFrom($invitation->role);
+            if ($role === null) {
+                Log::error('Invalid role in invitation', [
+                    'invitation' => $invitation->getKey(),
+                    'role' => $invitation->role,
+                ]);
+
+                continue;
+            }
+            app(MemberService::class)->addMember($user, $organization, $role);
+
+            $invitation->delete();
+
+            $organizations->push($organization);
+        }
+
+        return $organizations;
     }
 }

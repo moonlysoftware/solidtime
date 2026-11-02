@@ -9,7 +9,15 @@ import {
 } from './utils/currentTimeEntry';
 import type { Page } from '@playwright/test';
 import { newTagResponse } from './utils/tags';
-import { updateOrganizationCurrencyViaWeb } from './utils/api';
+import {
+    createProjectViaApi,
+    createTaskViaApi,
+    createClientViaApi,
+    createTimeEntryViaApi,
+    archiveProjectViaApi,
+    markTaskDoneViaApi,
+    updateOrganizationCurrencyViaWeb,
+} from './utils/api';
 
 // Date picker button name patterns for different date formats
 const DATE_DISPLAY_PATTERN = /^\d{4}-\d{2}-\d{2}$|^\d{2}\/\d{2}\/\d{4}$|^\d{2}\.\d{2}\.\d{4}$/;
@@ -30,7 +38,7 @@ test('test that starting and stopping a timer without description and project wo
 });
 
 test('test that billable icon shows dollar sign for USD currency', async ({ page, ctx }) => {
-    await updateOrganizationCurrencyViaWeb(ctx, 'USD');
+    await updateOrganizationCurrencyViaWeb(page, ctx, 'USD');
     await goToDashboard(page);
     await page.waitForLoadState('networkidle');
     const billableButton = page.getByRole('button', { name: 'Non Billable' }).first();
@@ -39,7 +47,7 @@ test('test that billable icon shows dollar sign for USD currency', async ({ page
 });
 
 test('test that billable icon shows euro sign for EUR currency', async ({ page, ctx }) => {
-    await updateOrganizationCurrencyViaWeb(ctx, 'EUR');
+    await updateOrganizationCurrencyViaWeb(page, ctx, 'EUR');
     await goToDashboard(page);
     await page.waitForLoadState('networkidle');
     const billableButton = page.getByRole('button', { name: 'Non Billable' }).first();
@@ -293,7 +301,7 @@ test('test that setting an end time with a different date via the timetracker ra
     await endDatePicker.click();
 
     // Calendar should appear
-    const calendarGrid = page.getByRole('grid');
+    const calendarGrid = page.getByRole('gridcell').first();
     await expect(calendarGrid).toBeVisible({ timeout: 5000 });
 
     // Navigate to the next month and select a day to ensure end > start
@@ -368,6 +376,105 @@ test('test that timer started on dashboard is visible on time page', async ({ pa
     await assertThatTimerIsStopped(page);
 });
 
+test('test that picking a recently tracked entry starts a timer with its fields', async ({
+    page,
+    ctx,
+}) => {
+    const project = await createProjectViaApi(ctx, {
+        name: `RecentProj ${Math.floor(Math.random() * 100000)}`,
+        is_billable: false,
+    });
+    await createTimeEntryViaApi(ctx, {
+        description: 'Recent work item',
+        duration: '1h',
+        projectId: project.id,
+    });
+
+    await goToDashboard(page);
+    const description = page.getByTestId('time_entry_description');
+    await expect(description).toBeEditable();
+
+    // Focusing the description opens the "Recently Tracked" dropdown listing the finished entry.
+    await description.click();
+    const recentEntry = page.getByText('Recent work item').first();
+    await expect(recentEntry).toBeVisible();
+
+    // Clicking it (mousedown) copies its fields — including the project — into a new running entry.
+    await Promise.all([
+        page.waitForResponse(async (response) => {
+            if (
+                !response.url().includes('/time-entries') ||
+                response.request().method() !== 'POST' ||
+                response.status() !== 201
+            ) {
+                return false;
+            }
+            const body = await response.json();
+            return (
+                body.data.description === 'Recent work item' &&
+                body.data.project_id === project.id &&
+                body.data.end === null
+            );
+        }),
+        recentEntry.click(),
+    ]);
+    await assertThatTimerHasStarted(page);
+    await expect(description).toHaveValue('Recent work item');
+    await expect(page.getByRole('button', { name: project.name })).toBeVisible();
+
+    // Cleanup: stop the running (project-bearing) entry
+    await Promise.all([
+        page.waitForResponse(async (response) => {
+            if (response.status() !== 200 || !response.url().includes('/time-entries/')) {
+                return false;
+            }
+            const body = await response.json();
+            return body.data.description === 'Recent work item' && body.data.end !== null;
+        }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerIsStopped(page);
+});
+
+test('test that creating a new project from the time tracker dropdown prefills the search text', async ({
+    page,
+    ctx,
+}) => {
+    const existingProjectName = 'Existing Project ' + Math.floor(Math.random() * 10000);
+    const searchText = 'PrefillProject ' + Math.floor(Math.random() * 10000);
+
+    // Create a project so the dropdown renders (not the "Add new project" button)
+    await createProjectViaApi(ctx, { name: existingProjectName });
+    await goToDashboard(page);
+
+    // Open the project dropdown
+    await page.getByRole('button', { name: 'No Project' }).click();
+
+    // Type a search term that won't match any existing project
+    await page.getByTestId('client_dropdown_search').fill(searchText);
+
+    // Click "Create new Project"
+    await page.getByText('Create new Project').click();
+
+    // Verify the project name input is pre-filled with the search text
+    await expect(page.getByLabel('Project name')).toHaveValue(searchText);
+
+    // Complete project creation to verify full flow works
+    await Promise.all([
+        page.waitForResponse(
+            async (response) =>
+                response.url().includes('/projects') &&
+                response.request().method() === 'POST' &&
+                response.status() === 201 &&
+                (await response.json()).data.name === searchText
+        ),
+        page.getByRole('button', { name: 'Create Project' }).click(),
+    ]);
+
+    // The project dropdown should now show the newly created project
+    await expect(page.getByRole('button', { name: searchText })).toBeVisible();
+});
+
 test('test that adding a project and tag before starting timer works', async ({ page }) => {
     const newTagName = 'TimerTag ' + Math.floor(Math.random() * 10000);
     await goToDashboard(page);
@@ -401,4 +508,273 @@ test('test that adding a project and tag before starting timer works', async ({ 
         startOrStopTimerWithButton(page),
     ]);
     await assertThatTimerIsStopped(page);
+});
+
+// ──────────────────────────────────────────────────
+// Project / Task selector dropdown
+// Regression coverage for the virtualized + lookup-map refactor of
+// TimeTrackerProjectTaskDropdown. The dropdown only (re)filters on open and on search
+// change, so we wait for the dashboard prefetch to settle before opening it.
+// ──────────────────────────────────────────────────
+
+test.describe('Project Task Dropdown', () => {
+    test.describe.configure({ timeout: 60_000 });
+
+    test('test that a project far down a long list can be found via search and selected', async ({
+        page,
+        ctx,
+    }) => {
+        // Seed enough projects that the target sits outside the initially rendered window.
+        const seed = Math.floor(Math.random() * 100000);
+        const prefix = `VirtProj ${seed} `;
+        await Promise.all(
+            Array.from({ length: 30 }, (_, i) =>
+                createProjectViaApi(ctx, { name: prefix + String(i).padStart(2, '0') })
+            )
+        );
+        const target = prefix + '27';
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        await page.getByTestId('client_dropdown_search').fill(target);
+        await page.getByRole('option').filter({ hasText: target }).click();
+
+        // The trigger now reflects the selected project.
+        await expect(page.getByRole('button', { name: target })).toBeVisible();
+    });
+
+    test('test that expanding a project and selecting a task works', async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const projectName = `ExpandProj ${seed}`;
+        const taskName = `ExpandTask ${seed}`;
+        const project = await createProjectViaApi(ctx, { name: projectName });
+        await createTaskViaApi(ctx, { name: taskName, project_id: project.id });
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        const projectOption = page.getByRole('option').filter({ hasText: projectName });
+        await expect(projectOption).toBeVisible();
+
+        // Expand the project's tasks via the "N Tasks" button, then select the task.
+        await projectOption.getByText(/Tasks/).click();
+        await page.getByText(taskName, { exact: true }).click();
+
+        // Scoped to the trigger button: the closing dropdown also contains the name while animating out.
+        await expect(
+            page.getByRole('button', { name: `${projectName} ${taskName}` })
+        ).toBeVisible();
+    });
+
+    test('test that keyboard navigation selects a project', async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const projectName = `KbProj ${seed}`;
+        await createProjectViaApi(ctx, { name: projectName });
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        const search = page.getByTestId('client_dropdown_search');
+        // On open the search is focused and "No Project" is highlighted.
+        await expect(search).toBeFocused();
+
+        // Arrow down from "No Project" to the project, then select it with Enter.
+        await search.press('ArrowDown');
+        await search.press('Enter');
+
+        await expect(page.getByRole('button', { name: projectName })).toBeVisible();
+    });
+
+    test('test that search filters the dropdown by project and client name', async ({
+        page,
+        ctx,
+    }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const clientName = `FilterClient ${seed}`;
+        const alphaProject = `AlphaProj ${seed}`;
+        const betaProject = `BetaProj ${seed}`;
+        const client = await createClientViaApi(ctx, { name: clientName });
+        await createProjectViaApi(ctx, { name: alphaProject, client_id: client.id });
+        await createProjectViaApi(ctx, { name: betaProject });
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        const search = page.getByTestId('client_dropdown_search');
+        const alphaOption = page.getByRole('option').filter({ hasText: alphaProject });
+        const betaOption = page.getByRole('option').filter({ hasText: betaProject });
+
+        // Both projects are visible before filtering.
+        await expect(alphaOption).toBeVisible();
+        await expect(betaOption).toBeVisible();
+
+        // Project-name search shows only the matching project.
+        await search.fill('AlphaProj');
+        await expect(alphaOption).toBeVisible();
+        await expect(betaOption).not.toBeVisible();
+
+        // Client-name search shows the project that belongs to that client.
+        await search.fill(clientName);
+        await expect(alphaOption).toBeVisible();
+        await expect(betaOption).not.toBeVisible();
+    });
+
+    test("test that searching by task name surfaces the task's project", async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const projectWithTask = `TaskSearchProj ${seed}`;
+        const taskName = `Findable Task ${seed}`;
+        const unrelatedProject = `Unrelated Proj ${seed}`;
+        const project = await createProjectViaApi(ctx, { name: projectWithTask });
+        await createTaskViaApi(ctx, { name: taskName, project_id: project.id });
+        await createProjectViaApi(ctx, { name: unrelatedProject });
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        await page.getByTestId('client_dropdown_search').fill(taskName);
+
+        // The project owning the task is shown (with the task), the unrelated project is not.
+        await expect(page.getByRole('option').filter({ hasText: projectWithTask })).toBeVisible();
+        await expect(page.getByText(taskName, { exact: true })).toBeVisible();
+        await expect(
+            page.getByRole('option').filter({ hasText: unrelatedProject })
+        ).not.toBeVisible();
+    });
+
+    test('test that archived projects are hidden from the dropdown', async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const activeProject = `ActiveProj ${seed}`;
+        const archivedProject = `ArchivedProj ${seed}`;
+        await createProjectViaApi(ctx, { name: activeProject });
+        const toArchive = await createProjectViaApi(ctx, { name: archivedProject });
+        await archiveProjectViaApi(ctx, toArchive);
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+
+        // Wait for the list to load, then confirm the archived project is filtered out.
+        await expect(page.getByRole('option').filter({ hasText: activeProject })).toBeVisible();
+        await expect(
+            page.getByRole('option').filter({ hasText: archivedProject })
+        ).not.toBeVisible();
+    });
+
+    test('test that done tasks are hidden when expanding a project', async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const projectName = `DoneTaskProj ${seed}`;
+        const activeTask = `Active Task ${seed}`;
+        const doneTask = `Done Task ${seed}`;
+        const project = await createProjectViaApi(ctx, { name: projectName });
+        await createTaskViaApi(ctx, { name: activeTask, project_id: project.id });
+        const taskToFinish = await createTaskViaApi(ctx, {
+            name: doneTask,
+            project_id: project.id,
+        });
+        await markTaskDoneViaApi(ctx, taskToFinish);
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        const projectOption = page.getByRole('option').filter({ hasText: projectName });
+        await expect(projectOption).toBeVisible();
+        await projectOption.getByText(/Tasks/).click();
+
+        // Only the active task shows; the done task is filtered out.
+        await expect(page.getByText(activeTask, { exact: true })).toBeVisible();
+        await expect(page.getByText(doneTask, { exact: true })).not.toBeVisible();
+    });
+
+    test('test that keyboard navigation can expand a project and select a task', async ({
+        page,
+        ctx,
+    }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const projectName = `KbTaskProj ${seed}`;
+        const taskName = `KbTask ${seed}`;
+        const project = await createProjectViaApi(ctx, { name: projectName });
+        await createTaskViaApi(ctx, { name: taskName, project_id: project.id });
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        const search = page.getByTestId('client_dropdown_search');
+        await expect(search).toBeFocused();
+
+        // No Project is highlighted on open: down to the project, right to expand its tasks,
+        // down to the task, Enter to select it.
+        await search.press('ArrowDown');
+        await search.press('ArrowRight');
+        await search.press('ArrowDown');
+        await search.press('Enter');
+
+        // Scoped to the trigger button: the closing dropdown also contains the name while animating out.
+        await expect(
+            page.getByRole('button', { name: `${projectName} ${taskName}` })
+        ).toBeVisible();
+    });
+
+    test('test that pressing space selects the highlighted project', async ({ page, ctx }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const projectName = `SpaceProj ${seed}`;
+        await createProjectViaApi(ctx, { name: projectName });
+
+        await goToDashboard(page);
+        await page.waitForLoadState('networkidle');
+
+        await page.getByRole('button', { name: 'No Project' }).click();
+        const search = page.getByTestId('client_dropdown_search');
+        await expect(search).toBeFocused();
+
+        // Arrow down from "No Project" to the project, then the space shortcut selects it.
+        await search.press('ArrowDown');
+        await search.press('Space');
+
+        await expect(page.getByRole('button', { name: projectName })).toBeVisible();
+    });
+});
+
+test('test that simple mode hides the project, tag and billable controls', async ({ page }) => {
+    await goToDashboard(page);
+    await expect(page.getByTestId('time_entry_description')).toBeEditable();
+    // Project mode shows the project and billable controls
+    await expect(page.getByRole('button', { name: 'No Project' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Non Billable' }).first()).toBeVisible();
+
+    // Switch to simple mode via the more options dropdown (client-side preference, no request)
+    await page.getByRole('button', { name: 'Time entry actions' }).click();
+    await page.getByRole('menuitem', { name: 'Switch to simple mode' }).click();
+
+    // Simple mode is the project tracker without the project/tag/billable selectors; the
+    // description input and clock-in/out stay.
+    await expect(page.getByTestId('time_entry_description')).toBeEditable();
+    await expect(page.getByRole('button', { name: 'No Project' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Non Billable' })).toHaveCount(0);
+
+    // Clock in and out
+    await Promise.all([
+        newTimeEntryResponse(page, { type: 'work' }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerHasStarted(page);
+    await page.waitForTimeout(1500);
+    await Promise.all([
+        stoppedTimeEntryResponse(page, { type: 'work' }),
+        startOrStopTimerWithButton(page),
+    ]);
+    await assertThatTimerIsStopped(page);
+
+    // Switch back to project mode: the controls return
+    await page.getByRole('button', { name: 'Time entry actions' }).click();
+    await page.getByRole('menuitem', { name: 'Switch to project mode' }).click();
+    await expect(page.getByRole('button', { name: 'No Project' })).toBeVisible();
 });

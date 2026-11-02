@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import UpgradeLockedValue from '@/packages/ui/src/UpgradeLockedValue.vue';
+import { useBillableRatesLock } from '@/packages/ui/src/utils/useBillableRatesLock';
 import { use } from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { BarChart } from 'echarts/charts';
@@ -16,10 +18,10 @@ import CardTitle from '@/packages/ui/src/CardTitle.vue';
 import LinearGradient from 'zrender/lib/graphic/LinearGradient';
 import ProjectsChartCard from '@/Components/Dashboard/ProjectsChartCard.vue';
 import ThisWeekReportingTable from '@/Components/Dashboard/ThisWeekReportingTable.vue';
-import { formatHumanReadableDuration } from '@/packages/ui/src/utils/time';
+import { formatReportingDuration } from '@/packages/ui/src/utils/time';
 import { formatCents } from '@/packages/ui/src/utils/money';
 import { getWeekStart } from '@/packages/ui/src/utils/settings';
-import { useCssVariable } from '@/utils/useCssVariable';
+import { useCssVariable } from '@/packages/ui/src';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import { useQuery } from '@tanstack/vue-query';
 import { getCurrentOrganizationId } from '@/utils/useUser';
@@ -101,6 +103,8 @@ const { data: totalWeeklyBillableTime } = useQuery({
     staleTime: 1000 * 30, // 30 seconds
 });
 
+const { locked: billableRatesLocked } = useBillableRatesLock();
+
 const { data: totalWeeklyBillableAmount } = useQuery({
     queryKey: ['totalWeeklyBillableAmount', organizationId],
     queryFn: () => {
@@ -110,7 +114,7 @@ const { data: totalWeeklyBillableAmount } = useQuery({
             },
         });
     },
-    enabled: computed(() => !!organizationId.value),
+    enabled: computed(() => !!organizationId.value && !billableRatesLocked.value),
     staleTime: 1000 * 30, // 30 seconds
 });
 
@@ -223,7 +227,7 @@ const option = computed(() => {
                 type: 'bar',
                 tooltip: {
                     valueFormatter: (value: number) => {
-                        return formatHumanReadableDuration(
+                        return formatReportingDuration(
                             value,
                             organization?.value?.interval_format,
                             organization?.value?.number_format
@@ -252,7 +256,7 @@ const option = computed(() => {
                 title="Spent Time"
                 :value="
                     totalWeeklyTime
-                        ? formatHumanReadableDuration(
+                        ? formatReportingDuration(
                               totalWeeklyTime,
                               organization?.interval_format,
                               organization?.number_format
@@ -263,14 +267,18 @@ const option = computed(() => {
                 title="Billable Time"
                 :value="
                     totalWeeklyBillableTime
-                        ? formatHumanReadableDuration(
+                        ? formatReportingDuration(
                               totalWeeklyBillableTime,
                               organization?.interval_format,
                               organization?.number_format
                           )
                         : '--'
                 " />
+            <StatCard v-if="billableRatesLocked" title="Billable Amount">
+                <UpgradeLockedValue />
+            </StatCard>
             <StatCard
+                v-else
                 title="Billable Amount"
                 :value="
                     totalWeeklyBillableAmount

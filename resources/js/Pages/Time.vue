@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import AppLayout from '@/Layouts/AppLayout.vue';
 import TimeTracker from '@/Components/TimeTracker.vue';
+import { router } from '@inertiajs/vue3';
 import { computed, ref, watch } from 'vue';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
 import { storeToRefs } from 'pinia';
@@ -16,6 +17,7 @@ import { useElementVisibility } from '@vueuse/core';
 import { ClockIcon } from '@heroicons/vue/20/solid';
 import LoadingSpinner from '@/packages/ui/src/LoadingSpinner.vue';
 import { useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
+import { groupSimilarTimeEntriesSetting } from '@/utils/timeEntryGrouping';
 import { useTasksQuery } from '@/utils/useTasksQuery';
 import { useProjectsQuery } from '@/utils/useProjectsQuery';
 import TimeEntryGroupedTable from '@/packages/ui/src/TimeEntry/TimeEntryGroupedTable.vue';
@@ -26,6 +28,8 @@ import TimeEntryMassActionRow from '@/packages/ui/src/TimeEntry/TimeEntryMassAct
 import type { UpdateMultipleTimeEntriesChangeset } from '@/packages/api/src';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 import { canCreateProjects } from '@/utils/permissions';
+import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
+import { getCurrentOrganizationId } from '@/utils/useUser';
 import { useTagsStore } from '@/utils/useTags';
 import { useProjectsStore } from '@/utils/useProjects';
 import { useClientsStore } from '@/utils/useClients';
@@ -87,6 +91,8 @@ async function createClient(body: CreateClientBody): Promise<Client | undefined>
     return await useClientsStore().createClient(body);
 }
 
+const { organization } = useOrganizationQuery(getCurrentOrganizationId()!);
+
 const selectedTimeEntries = ref([] as TimeEntry[]);
 
 async function clearSelectionAndState() {
@@ -96,6 +102,11 @@ async function clearSelectionAndState() {
 function deleteSelected() {
     deleteTimeEntries(selectedTimeEntries.value);
     selectedTimeEntries.value = [];
+}
+
+// SPA-navigate the calendar to a break's day so its placement can be fixed there.
+function goToCalendarDay(date: string) {
+    router.visit(`/calendar?date=${date}`);
 }
 </script>
 
@@ -115,6 +126,7 @@ function deleteSelected() {
             :tags="tags"
             :currency="getOrganizationCurrencyString()"
             :clients="clients"
+            :organization-billable-rate="organization?.billable_rate ?? null"
             class="border-t border-default-background-separator hidden sm:block"
             :update-time-entries="
                 (args) =>
@@ -134,6 +146,7 @@ function deleteSelected() {
             :create-project
             :enable-estimated-time="isAllowedToPerformPremiumAction()"
             :can-create-project="canCreateProjects()"
+            :organization-billable-rate="organization?.billable_rate ?? null"
             :clients
             :create-client
             :update-time-entry
@@ -145,6 +158,8 @@ function deleteSelected() {
             :tasks="tasks"
             :currency="getOrganizationCurrencyString()"
             :time-entries="timeEntries"
+            :group-similar-time-entries="groupSimilarTimeEntriesSetting"
+            :fix-in-calendar="goToCalendarDay"
             :tags="tags"></TimeEntryGroupedTable>
         <div v-if="isPending" class="flex justify-center items-center py-12">
             <LoadingSpinner></LoadingSpinner>
@@ -157,7 +172,7 @@ function deleteSelected() {
         <div ref="loadMoreContainer">
             <div
                 v-if="isFetchingNextPage"
-                class="flex justify-center items-center py-5 text-text-primary font-medium">
+                class="flex justify-center items-center py-5 text-sm text-text-primary font-medium">
                 <LoadingSpinner></LoadingSpinner>
                 <span> Loading more time entries... </span>
             </div>

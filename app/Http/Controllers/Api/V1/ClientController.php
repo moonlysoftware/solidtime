@@ -29,8 +29,6 @@ class ClientController extends Controller
     /**
      * Get clients
      *
-     * @return ClientCollection<ClientResource>
-     *
      * @throws AuthorizationException
      *
      * @operationId getClients
@@ -43,7 +41,8 @@ class ClientController extends Controller
 
         $clientsQuery = Client::query()
             ->whereBelongsTo($organization, 'organization')
-            ->orderBy('created_at', 'desc');
+            ->orderBy('created_at', 'desc')
+            ->orderBy('id');
 
         if (! $canViewAllClients) {
             $clientsQuery->visibleByEmployee($user);

@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import UpgradeLockedValue from '@/packages/ui/src/UpgradeLockedValue.vue';
+import { useBillableRatesLock } from '@/packages/ui/src/utils/useBillableRatesLock';
 import {
     ChartBarIcon,
     ArrowDownTrayIcon,
     EllipsisVerticalIcon,
     LockClosedIcon,
 } from '@heroicons/vue/20/solid';
-import { SaveIcon } from 'lucide-vue-next';
+import { SaveIcon } from '@lucide/vue';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import {
-    formatHumanReadableDuration,
+    formatReportingDuration,
     getDayJsInstance,
     getLocalizedDayJs,
 } from '@/packages/ui/src/utils/time';
@@ -28,9 +30,10 @@ import {
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuTrigger,
-} from '@/Components/ui/dropdown-menu';
+} from '@/packages/ui/src';
 import ReportCreateModal from '@/Components/Common/Report/ReportCreateModal.vue';
-import UpgradeModal from '@/Components/Common/UpgradeModal.vue';
+import UpgradeModal from '@/packages/ui/src/UpgradeModal.vue';
+import type { UpgradeFeature } from '@/packages/ui/src/UpgradeModal/useUpgradeCta';
 import { canCreateReports } from '@/utils/permissions';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
 import { computed, type ComputedRef, inject, ref, watch } from 'vue';
@@ -49,6 +52,7 @@ import type { ExportFormat } from '@/types/reporting';
 import { getRandomColorWithSeed } from '@/packages/ui/src/utils/color';
 import { useProjectsQuery } from '@/utils/useProjectsQuery';
 import { useAggregatedTimeEntriesQuery } from '@/utils/useAggregatedTimeEntriesQuery';
+import type { TagMatchType } from '@/types/reporting';
 
 type TimeEntryRoundingType = 'up' | 'down' | 'nearest';
 
@@ -56,7 +60,7 @@ const { handleApiRequestNotifications } = useNotificationsStore();
 
 const startDate = useSessionStorage<string>(
     'reporting-start-date',
-    getLocalizedDayJs(getDayJsInstance()().format()).subtract(14, 'd').format()
+    getLocalizedDayJs(getDayJsInstance()().format()).subtract(13, 'd').format()
 );
 const endDate = useSessionStorage<string>(
     'reporting-end-date',
@@ -67,8 +71,10 @@ const selectedProjects = ref<string[]>([]);
 const selectedMembers = ref<string[]>([]);
 const selectedTasks = ref<string[]>([]);
 const selectedClients = ref<string[]>([]);
+const tagMatchType = ref<TagMatchType>('contains');
 
 const billable = ref<'true' | 'false' | null>(null);
+const entryType = ref<'work' | 'break' | null>('work');
 const roundingEnabled = ref<boolean>(false);
 const roundingType = ref<TimeEntryRoundingType>('nearest');
 const roundingMinutes = ref<number>(15);
@@ -122,7 +128,9 @@ const filterParams = computed<AggregatedTimeEntriesQueryParams>(() => {
         task_ids: selectedTasks.value.length > 0 ? selectedTasks.value : undefined,
         client_ids: selectedClients.value.length > 0 ? selectedClients.value : undefined,
         tag_ids: selectedTags.value.length > 0 ? selectedTags.value : undefined,
+        tag_match_type: selectedTags.value.length > 0 ? tagMatchType.value : undefined,
         billable: billable.value !== null ? billable.value : undefined,
+        type: entryType.value !== null ? entryType.value : undefined,
         member_id: getCurrentRole() === 'employee' ? getCurrentMembershipId() : undefined,
         rounding_type: roundingEnabled.value ? roundingType.value : undefined,
         rounding_minutes: roundingEnabled.value ? roundingMinutes.value : undefined,
@@ -157,7 +165,7 @@ const aggregatedTableTimeEntries = computed<AggregatedTimeEntries | undefined>((
 });
 
 const reportProperties = computed(() => {
-    const { billable: billableFilter, ...rest } = filterParams.value;
+    const { billable: billableFilter, type: typeFilter, ...rest } = filterParams.value;
 
     let billableValue: boolean | null = null;
     if (billableFilter === 'true') {
@@ -169,6 +177,7 @@ const reportProperties = computed(() => {
     return {
         ...rest,
         billable: billableValue,
+        time_entry_type: typeFilter ?? null,
         group: group.value,
         sub_group: subGroup.value,
         history_group: getOptimalGroupingOption(startDate.value, endDate.value),
@@ -208,10 +217,13 @@ const showExportModal = ref(false);
 const exportUrl = ref<string | null>(null);
 const showCreateReportModal = ref(false);
 const showPremiumModal = ref(false);
+// Note: The premium modal is shared by the PDF export and saving a report
+const premiumFeature = ref<UpgradeFeature>('pdf-reports');
 const exportLoading = ref(false);
 
 function triggerExport(format: ExportFormat) {
     if (format === 'pdf' && !isAllowedToPerformPremiumAction()) {
+        premiumFeature.value = 'pdf-reports';
         showPremiumModal.value = true;
         return;
     }
@@ -225,6 +237,7 @@ function onSaveReportClick() {
     if (isAllowedToPerformPremiumAction()) {
         showCreateReportModal.value = true;
     } else {
+        premiumFeature.value = 'shareable-reports';
         showPremiumModal.value = true;
     }
 }
@@ -234,7 +247,8 @@ const groupedPieChartData = computed(() => {
         aggregatedTableTimeEntries.value?.grouped_data?.map((entry) => {
             const name = getNameForReportingRowEntry(
                 entry.key,
-                aggregatedTableTimeEntries.value?.grouped_type ?? null
+                aggregatedTableTimeEntries.value?.grouped_type ?? null,
+                organization?.value?.date_format
             );
             let color = getRandomColorWithSeed(entry.key ?? 'none');
             if (
@@ -249,11 +263,7 @@ const groupedPieChartData = computed(() => {
             }
             return {
                 value: entry.seconds,
-                name:
-                    getNameForReportingRowEntry(
-                        entry.key,
-                        aggregatedTableTimeEntries.value?.grouped_type ?? null
-                    ) ?? '',
+                name: name ?? '',
                 color: color,
             };
         }) ?? []
@@ -263,23 +273,32 @@ const groupedPieChartData = computed(() => {
 const tableData = computed(() => {
     return aggregatedTableTimeEntries.value?.grouped_data?.map((entry) => {
         return {
+            key: entry.key,
             seconds: entry.seconds,
             cost: entry.cost,
             description: getNameForReportingRowEntry(
                 entry.key,
-                aggregatedTableTimeEntries.value?.grouped_type ?? null
+                aggregatedTableTimeEntries.value?.grouped_type ?? null,
+                organization?.value?.date_format
             ),
             grouped_data:
                 entry.grouped_data?.map((el) => {
                     return {
+                        key: el.key,
                         seconds: el.seconds,
                         cost: el.cost,
-                        description: getNameForReportingRowEntry(el.key, entry.grouped_type),
+                        description: getNameForReportingRowEntry(
+                            el.key,
+                            entry.grouped_type,
+                            organization?.value?.date_format
+                        ),
                     };
                 }) ?? [],
         };
     });
 });
+
+const { locked: billableRatesLocked } = useBillableRatesLock();
 </script>
 
 <template>
@@ -289,9 +308,7 @@ const tableData = computed(() => {
     <ReportCreateModal
         v-model:show="showCreateReportModal"
         :properties="reportProperties"></ReportCreateModal>
-    <UpgradeModal v-model:show="showPremiumModal">
-        This feature is only available in solidtime Professional.
-    </UpgradeModal>
+    <UpgradeModal v-model:show="showPremiumModal" :feature="premiumFeature" />
     <MainContainer
         class="h-14 sm:h-16 border-b border-default-background-separator flex flex-wrap gap-y-3 justify-between items-center">
         <div class="flex items-center space-x-3 sm:space-x-6">
@@ -366,7 +383,9 @@ const tableData = computed(() => {
         v-model:selected-tasks="selectedTasks"
         v-model:selected-clients="selectedClients"
         v-model:selected-tags="selectedTags"
+        v-model:tag-match-type="tagMatchType"
         v-model:billable="billable"
+        v-model:entry-type="entryType"
         v-model:rounding-enabled="roundingEnabled"
         v-model:rounding-type="roundingType"
         v-model:rounding-minutes="roundingMinutes"
@@ -413,9 +432,8 @@ const tableData = computed(() => {
                         ">
                         <ReportingRow
                             v-for="entry in tableData"
-                            :key="entry.description ?? 'none'"
+                            :key="entry.key ?? 'none'"
                             :currency="getOrganizationCurrencyString()"
-                            :type="aggregatedTableTimeEntries.grouped_type"
                             :show-cost="showBillableRate"
                             :entry="entry"></ReportingRow>
                         <div class="contents [&>*]:transition text-text-tertiary [&>*]:h-[50px]">
@@ -426,7 +444,7 @@ const tableData = computed(() => {
                                 class="justify-end flex items-center font-medium"
                                 :class="!showBillableRate ? 'pr-6' : ''">
                                 {{
-                                    formatHumanReadableDuration(
+                                    formatReportingDuration(
                                         aggregatedTableTimeEntries.seconds,
                                         organization?.interval_format,
                                         organization?.number_format
@@ -436,17 +454,20 @@ const tableData = computed(() => {
                             <div
                                 v-if="showBillableRate"
                                 class="justify-end pr-6 flex items-center font-medium">
-                                {{
-                                    aggregatedTableTimeEntries.cost
-                                        ? formatCents(
-                                              aggregatedTableTimeEntries.cost,
-                                              getOrganizationCurrencyString(),
-                                              organization?.currency_format,
-                                              organization?.currency_symbol,
-                                              organization?.number_format
-                                          )
-                                        : '--'
-                                }}
+                                <UpgradeLockedValue v-if="billableRatesLocked" />
+                                <template v-else>
+                                    {{
+                                        aggregatedTableTimeEntries.cost
+                                            ? formatCents(
+                                                  aggregatedTableTimeEntries.cost,
+                                                  getOrganizationCurrencyString(),
+                                                  organization?.currency_format,
+                                                  organization?.currency_symbol,
+                                                  organization?.number_format
+                                              )
+                                            : '--'
+                                    }}
+                                </template>
                             </div>
                         </div>
                     </template>

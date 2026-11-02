@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace App\Service;
 
+use App\Enums\TagMatchType;
+use App\Enums\TimeEntryType;
 use App\Models\Member;
 use App\Models\TimeEntry;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class TimeEntryFilter
 {
@@ -25,6 +29,26 @@ class TimeEntryFilter
     public function __construct(Builder $builder)
     {
         $this->builder = $builder;
+    }
+
+    /**
+     * @param  array<mixed>  $ids
+     * @return Collection<int, string>
+     */
+    public static function idArrayToCollection(array $ids): Collection
+    {
+        $collection = new Collection;
+        foreach ($ids as $id) {
+            if (! is_string($id)) {
+                throw new \InvalidArgumentException('The given ID is not a string');
+            }
+            if ($id !== self::NONE_VALUE && ! Str::isUuid($id)) {
+                throw new \InvalidArgumentException('The given ID is not a valid UUID');
+            }
+            $collection->push($id);
+        }
+
+        return $collection;
     }
 
     public function addEndFilter(?string $dateTime): self
@@ -62,7 +86,7 @@ class TimeEntryFilter
         if ($start === null) {
             return $this;
         }
-        $this->builder->where('start', '>', $start);
+        $this->builder->where('start', '>=', $start);
 
         return $this;
     }
@@ -109,7 +133,8 @@ class TimeEntryFilter
      */
     public function addMemberIdsFilter(?array $memberIds): self
     {
-        if ($memberIds === null) {
+        // An empty selection is no constraint, the same as null
+        if ($memberIds === null || count($memberIds) === 0) {
             return $this;
         }
         $this->builder->whereIn('member_id', $memberIds);
@@ -143,6 +168,32 @@ class TimeEntryFilter
         return $this;
     }
 
+    public function addTypeFilter(?string $type): self
+    {
+        if ($type === null) {
+            return $this;
+        }
+        $typeEnum = TimeEntryType::tryFrom($type);
+        if ($typeEnum === null) {
+            Log::warning('Invalid type filter value', ['value' => $type]);
+
+            return $this;
+        }
+        $this->addType($typeEnum);
+
+        return $this;
+    }
+
+    public function addType(?TimeEntryType $type): self
+    {
+        if ($type === null) {
+            return $this;
+        }
+        $this->builder->where('type', '=', $type->value);
+
+        return $this;
+    }
+
     /**
      * @param  array<string>|null  $clientIds
      */
@@ -153,6 +204,10 @@ class TimeEntryFilter
         }
         $includeNone = in_array(self::NONE_VALUE, $clientIds, true);
         $clientIds = array_values(array_filter($clientIds, fn (string $id): bool => $id !== self::NONE_VALUE));
+        // An empty selection (no client IDs and not filtering for "none") is no constraint, so apply nothing
+        if (count($clientIds) === 0 && ! $includeNone) {
+            return $this;
+        }
 
         $this->builder->where(function (Builder $builder) use ($clientIds, $includeNone): void {
             if (count($clientIds) > 0) {
@@ -176,6 +231,10 @@ class TimeEntryFilter
         }
         $includeNone = in_array(self::NONE_VALUE, $projectIds, true);
         $projectIds = array_values(array_filter($projectIds, fn (string $id): bool => $id !== self::NONE_VALUE));
+        // An empty selection (no project IDs and not filtering for "none") is no constraint, so apply nothing
+        if (count($projectIds) === 0 && ! $includeNone) {
+            return $this;
+        }
 
         $this->builder->where(function (Builder $builder) use ($projectIds, $includeNone): void {
             if (count($projectIds) > 0) {
@@ -192,15 +251,21 @@ class TimeEntryFilter
     /**
      * @param  array<string>|null  $tagIds
      */
-    public function addTagIdsFilter(?array $tagIds): self
+    public function addTagIdsFilter(?array $tagIds, ?TagMatchType $tagMatchType = TagMatchType::Contains): self
     {
         if ($tagIds === null) {
             return $this;
         }
+        $tagMatchType ??= TagMatchType::Contains;
         $includeNone = in_array(self::NONE_VALUE, $tagIds, true);
         $tagIds = array_values(array_filter($tagIds, fn (string $id): bool => $id !== self::NONE_VALUE));
+        // An empty selection (no tag IDs and not filtering for "none") is no constraint, so apply nothing.
+        // This also prevents the not-contains branch from collapsing into "only entries with null tags".
+        if (count($tagIds) === 0 && ! $includeNone) {
+            return $this;
+        }
 
-        $this->builder->where(function (Builder $builder) use ($tagIds, $includeNone): void {
+        $tagCondition = function (Builder $builder) use ($tagIds, $includeNone): void {
             foreach ($tagIds as $tagId) {
                 $builder->orWhereJsonContains('tags', $tagId);
             }
@@ -209,7 +274,18 @@ class TimeEntryFilter
                     $query->whereJsonLength('tags', 0)->orWhereNull('tags');
                 });
             }
-        });
+        };
+
+        if ($tagMatchType === TagMatchType::NotContains) {
+            $this->builder->where(function (Builder $builder) use ($tagCondition, $includeNone): void {
+                $builder->whereNot($tagCondition);
+                if (! $includeNone) {
+                    $builder->orWhereNull('tags');
+                }
+            });
+        } else {
+            $this->builder->where($tagCondition);
+        }
 
         return $this;
     }
@@ -224,6 +300,10 @@ class TimeEntryFilter
         }
         $includeNone = in_array(self::NONE_VALUE, $taskIds, true);
         $taskIds = array_values(array_filter($taskIds, fn (string $id): bool => $id !== self::NONE_VALUE));
+        // An empty selection (no task IDs and not filtering for "none") is no constraint, so apply nothing
+        if (count($taskIds) === 0 && ! $includeNone) {
+            return $this;
+        }
 
         $this->builder->where(function (Builder $builder) use ($taskIds, $includeNone): void {
             if (count($taskIds) > 0) {

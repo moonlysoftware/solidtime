@@ -10,6 +10,7 @@ use Illuminate\Database\Query\JoinClause;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use stdClass;
 
 class SelfHostDatabaseConsistency extends Command
 {
@@ -38,7 +39,7 @@ class SelfHostDatabaseConsistency extends Command
         $problems = DB::table('time_entries')
             ->select(['time_entries.id as id'])
             ->join('tasks', 'time_entries.task_id', '=', 'tasks.id')
-            ->where('tasks.project_id', '!=', DB::raw('time_entries.project_id'))
+            ->whereRaw('tasks.project_id is distinct from time_entries.project_id')
             ->get();
         $this->logProblems($problems, 'Time entries have a task that does not belong to the project of the time entry', $hadAProblem);
 
@@ -57,6 +58,14 @@ class SelfHostDatabaseConsistency extends Command
             ->whereNull('project_id')
             ->get();
         $this->logProblems($problems, 'Time entries have a client but no project', $hadAProblem);
+
+        // End of time entries can not be before the start
+        $problems = DB::table('time_entries')
+            ->select(['id'])
+            ->whereNotNull('end')
+            ->whereColumn('end', '<', 'start')
+            ->get();
+        $this->logProblems($problems, 'Time entries have an end that is before the start', $hadAProblem);
 
         // Every user needs to be a member of at least one organization
         $problems = DB::table('users')
@@ -101,7 +110,7 @@ class SelfHostDatabaseConsistency extends Command
     }
 
     /**
-     * @param  Collection<int, \stdClass>  $problems
+     * @param  Collection<int, stdClass>  $problems
      */
     private function logProblems(Collection $problems, string $message, bool &$hadAProblem): void
     {

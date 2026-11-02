@@ -8,12 +8,14 @@ use App\Enums\CurrencyFormat;
 use App\Enums\DateFormat;
 use App\Enums\IntervalFormat;
 use App\Enums\NumberFormat;
+use App\Enums\TimeEntryAggregationType;
 use App\Enums\TimeFormat;
 use App\Models\Organization;
 use Brick\Math\BigDecimal;
 use Brick\Money\Money;
 use Carbon\CarbonInterface;
 use Carbon\CarbonInterval;
+use Illuminate\Support\Carbon;
 
 class LocalizationService
 {
@@ -96,6 +98,30 @@ class LocalizationService
         }
     }
 
+    /**
+     * Format a duration for reporting contexts (PDF reports, places that display duration
+     * directly next to cost). Promotes the verbose `Hh Mm` format to the compact `HH:MM:SS`
+     * so totals stay narrow and reconcile with cost, which is always computed to the second.
+     */
+    public function formatIntervalForReporting(CarbonInterval $interval): string
+    {
+        $promoted = [
+            IntervalFormat::HoursMinutes,
+            IntervalFormat::HoursMinutesColonSeparated,
+        ];
+        if (! in_array($this->intervalFormat, $promoted, true)) {
+            return $this->formatInterval($interval);
+        }
+
+        $previous = $this->intervalFormat;
+        $this->intervalFormat = IntervalFormat::HoursMinutesSecondsColonSeparated;
+        try {
+            return $this->formatInterval($interval);
+        } finally {
+            $this->intervalFormat = $previous;
+        }
+    }
+
     public function formatCurrency(Money $money): string
     {
         $currencyService = app(CurrencyService::class);
@@ -126,6 +152,38 @@ class LocalizationService
     public function formatDate(CarbonInterface $date): string
     {
         return $date->format($this->dateFormat->toCarbonFormat());
+    }
+
+    /**
+     * Time group types have no server-side descriptor; their keys are ISO dates and are
+     * formatted here instead. A Week key is the first day of that week, so it renders as the
+     * range it covers. A Year key is already a bare year, so it is returned unchanged - it must
+     * not be parsed, Carbon reads a four digit string as a time of day.
+     */
+    public function formatTimeGroupKey(?string $key, TimeEntryAggregationType $groupType): ?string
+    {
+        if ($key === null) {
+            return null;
+        }
+
+        if ($groupType === TimeEntryAggregationType::Day) {
+            return $this->formatDate(Carbon::parse($key));
+        }
+
+        if ($groupType === TimeEntryAggregationType::Week) {
+            $weekStart = Carbon::parse($key);
+
+            return $this->formatDate($weekStart).' - '.$this->formatDate($weekStart->copy()->addDays(6));
+        }
+
+        if ($groupType === TimeEntryAggregationType::Month) {
+            // Note: the leading "!" resets all fields the format does not name. Without it the
+            // day of the month is taken from today, and a day that the parsed month does not
+            // have overflows the date into the next month.
+            return Carbon::createFromFormat('!Y-m', $key)->format('F Y');
+        }
+
+        return $key;
     }
 
     public function setDateFormat(DateFormat $dateFormat): void

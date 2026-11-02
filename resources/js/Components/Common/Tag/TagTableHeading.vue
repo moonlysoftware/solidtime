@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import TableHeading from '@/Components/Common/TableHeading.vue';
-import { ChevronUpIcon, ChevronDownIcon } from '@heroicons/vue/16/solid';
+import SortableTableHeaderCell from '@/Components/Common/SortableTableHeaderCell.vue';
 import type { SortColumn, SortDirection } from '@/Components/Common/Tag/TagTable.vue';
 
 const props = defineProps<{
@@ -9,41 +9,20 @@ const props = defineProps<{
     descFirstColumns: ReadonlySet<SortColumn>;
 }>();
 
-const emit = defineEmits<{
+defineEmits<{
     sort: [column: SortColumn];
 }>();
-
-function handleSort(column: SortColumn) {
-    emit('sort', column);
-}
-
-function isSorted(column: SortColumn): boolean {
-    return props.sortColumn === column;
-}
-
-function isChevronDown(column: SortColumn): boolean {
-    if (!isSorted(column)) return false;
-    return props.descFirstColumns.has(column)
-        ? props.sortDirection === 'desc'
-        : props.sortDirection === 'asc';
-}
-
-function isChevronUp(column: SortColumn): boolean {
-    if (!isSorted(column)) return false;
-    return !isChevronDown(column);
-}
 </script>
 
 <template>
     <TableHeading>
-        <div
-            class="py-1.5 pr-3 text-left text-text-tertiary pl-4 sm:pl-6 lg:pl-8 3xl:pl-12 cursor-pointer hover:bg-secondary hover:text-text-primary transition-colors select-none flex items-center gap-1"
-            @click="handleSort('name')">
+        <SortableTableHeaderCell
+            class="pr-3 pl-4 sm:pl-6 lg:pl-8 3xl:pl-12"
+            column="name"
+            v-bind="props"
+            @sort="$emit('sort', $event)">
             Name
-            <ChevronDownIcon v-if="isChevronDown('name')" class="w-4 h-4" />
-            <ChevronUpIcon v-else-if="isChevronUp('name')" class="w-4 h-4" />
-            <span v-else class="w-4 h-4"></span>
-        </div>
+        </SortableTableHeaderCell>
         <div class="relative py-1.5 pl-3 pr-4 sm:pr-6 lg:pr-8 3xl:pr-12">
             <span class="sr-only">Edit</span>
         </div>

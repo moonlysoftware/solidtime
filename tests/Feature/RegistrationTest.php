@@ -8,20 +8,26 @@ use App\Enums\Role;
 use App\Enums\Weekday;
 use App\Events\NewsletterRegistered;
 use App\Models\Member;
+use App\Models\OrganizationInvitation;
 use App\Models\User;
 use App\Providers\RouteServiceProvider;
 use App\Service\IpLookup\IpLookupResponseDto;
 use App\Service\IpLookup\IpLookupServiceContract;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Log;
 use Laravel\Fortify\Features;
-use Laravel\Jetstream\Jetstream;
-use Tests\TestCase;
+use Tests\TestCaseWithDatabase;
+use TiMacDonald\Log\LogEntry;
 
-class RegistrationTest extends TestCase
+class RegistrationTest extends TestCaseWithDatabase
 {
-    use RefreshDatabase;
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Config::set('app.enable_registration', 'on');
+    }
 
     public function test_registration_screen_can_be_rendered(): void
     {
@@ -47,7 +53,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
         ]);
 
         // Assert
@@ -62,6 +68,7 @@ class RegistrationTest extends TestCase
         $member = Member::query()->whereBelongsTo($user, 'user')->whereBelongsTo($organization, 'organization')->firstOrFail();
         $this->assertSame(Role::Owner->value, $member->role);
         Event::assertNotDispatched(NewsletterRegistered::class);
+        $this->assertSame($organization->getKey(), $user->current_team_id);
     }
 
     public function test_user_registration_fails_if_registration_is_deactivated(): void
@@ -78,7 +85,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
         ]);
 
         // Assert
@@ -89,6 +96,77 @@ class RegistrationTest extends TestCase
         Event::assertNotDispatched(NewsletterRegistered::class);
     }
 
+    public function test_user_registration_fails_without_an_invitation_if_registration_is_invite_only(): void
+    {
+        Config::set('app.enable_registration', 'invite-only');
+
+        $response = $this->post('/register', [
+            'name' => 'Test User',
+            'email' => 'test@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'terms' => true,
+        ]);
+
+        $response->assertInvalid([
+            'email' => 'Registration is only available to invited users.',
+        ]);
+        $this->assertFalse(User::query()->where('email', 'test@example.com')->exists());
+    }
+
+    public function test_invited_user_can_register_if_registration_is_invite_only(): void
+    {
+        Config::set('app.enable_registration', 'invite-only');
+        $user = $this->createUserWithPermission();
+        OrganizationInvitation::factory()
+            ->forOrganization($user->organization)
+            ->role(Role::Employee)
+            ->accepted()
+            ->create([
+                'email' => 'Invited.User@example.com',
+            ]);
+
+        $response = $this->post('/register', [
+            'name' => 'Invited User',
+            'email' => 'invited.user@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'terms' => true,
+        ]);
+
+        $response->assertValid();
+        $this->assertAuthenticated();
+        $response->assertRedirect(RouteServiceProvider::HOME);
+        $newUser = User::query()->where('email', 'invited.user@example.com')->firstOrFail();
+        $this->assertSame($user->organization->getKey(), $newUser->organizations()->firstOrFail()->getKey());
+    }
+
+    public function test_user_must_accept_pending_invitation_before_registration_if_registration_is_invite_only(): void
+    {
+        Config::set('app.enable_registration', 'invite-only');
+        $user = $this->createUserWithPermission();
+        OrganizationInvitation::factory()
+            ->forOrganization($user->organization)
+            ->role(Role::Employee)
+            ->create([
+                'email' => 'test@example.com',
+            ]);
+
+        $response = $this->post('/register', [
+            'name' => 'Test User',
+            'email' => 'test@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'terms' => true,
+        ]);
+
+        $response->assertInvalid([
+            'email' => 'Please accept the organization invitation sent to your email address before registering.',
+        ]);
+        $this->assertGuest();
+        $this->assertFalse(User::query()->where('email', 'test@example.com')->exists());
+    }
+
     public function test_new_user_can_not_register_with_likely_invalid_domain(): void
     {
         // Act
@@ -97,7 +175,7 @@ class RegistrationTest extends TestCase
             'email' => 'peter.test@gmail',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
         ]);
 
         // Assert
@@ -112,7 +190,7 @@ class RegistrationTest extends TestCase
             'email' => 'PETER.test@gmail.com ',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
         ]);
 
         // Assert
@@ -132,7 +210,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'newsletter_consent' => true,
         ]);
 
@@ -154,7 +232,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'timezone' => 'Europe/Berlin',
         ]);
 
@@ -182,7 +260,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'timezone' => 'Europe/Berlin',
         ]);
 
@@ -213,7 +291,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'timezone' => null,
         ]);
 
@@ -244,7 +322,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'timezone' => 'Unknown timezone',
         ]);
 
@@ -275,7 +353,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'timezone' => 'Asia/Calcutta',
         ]);
 
@@ -296,7 +374,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
             'timezone' => 'Unknown timezone',
         ]);
 
@@ -319,7 +397,7 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
         ]);
 
         $this->assertFalse($this->isAuthenticated(), 'The user is authenticated');
@@ -340,10 +418,122 @@ class RegistrationTest extends TestCase
             'email' => 'test@example.com',
             'password' => 'password',
             'password_confirmation' => 'password',
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature(),
+            'terms' => true,
         ]);
 
         $this->assertAuthenticated();
         $response->assertRedirect(RouteServiceProvider::HOME);
+    }
+
+    public function test_registration_does_not_create_private_organization_if_invite_was_accepted_for_the_email_with_the_registration_email(): void
+    {
+        // Arrange
+        $user = $this->createUserWithPermission();
+        $organizationInvitation = OrganizationInvitation::factory()
+            ->forOrganization($user->organization)
+            ->role(Role::Employee)
+            ->accepted()
+            ->create([
+                'email' => 'test@example.com',
+            ]);
+
+        // Act
+        $response = $this->post('/register', [
+            'name' => 'Test User',
+            'email' => 'test@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'terms' => true,
+        ]);
+
+        $this->assertAuthenticated();
+        $response->assertRedirect(RouteServiceProvider::HOME);
+        $newUser = User::where('email', 'test@example.com')->first();
+        $this->assertNotNull($newUser);
+        $this->assertDatabaseMissing(OrganizationInvitation::class, [
+            'email' => 'test@example.com',
+        ]);
+        $organizations = $newUser->organizations;
+        $this->assertCount(1, $organizations);
+        $this->assertSame($user->organization->id, $organizations->first()->id);
+    }
+
+    public function test_registration_joins_invited_organization_even_if_invitation_email_casing_differs(): void
+    {
+        // Arrange: invitation stored with a different casing than the registration email
+        $user = $this->createUserWithPermission();
+        OrganizationInvitation::factory()
+            ->forOrganization($user->organization)
+            ->role(Role::Employee)
+            ->accepted()
+            ->create([
+                'email' => 'Invited.User@example.com',
+            ]);
+
+        // Act
+        $response = $this->post('/register', [
+            'name' => 'Invited User',
+            'email' => 'invited.user@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'terms' => true,
+        ]);
+
+        // Assert: joined the inviting organization, no extra personal organization, invitation consumed
+        $this->assertAuthenticated();
+        $response->assertRedirect(RouteServiceProvider::HOME);
+        $newUser = User::where('email', 'invited.user@example.com')->first();
+        $this->assertNotNull($newUser);
+        $this->assertDatabaseMissing(OrganizationInvitation::class, [
+            'email' => 'Invited.User@example.com',
+        ]);
+        $organizations = $newUser->organizations;
+        $this->assertCount(1, $organizations);
+        $this->assertSame($user->organization->id, $organizations->first()->id);
+    }
+
+    public function test_registration_logs_and_skips_accepted_invitation_with_invalid_role(): void
+    {
+        // Arrange
+        $user = $this->createUserWithPermission();
+        $organizationInvitation = OrganizationInvitation::factory()
+            ->forOrganization($user->organization)
+            ->accepted()
+            ->create([
+                'email' => 'test@example.com',
+                'role' => 'invalid-role',
+            ]);
+
+        // Act
+        $response = $this->post('/register', [
+            'name' => 'Test User',
+            'email' => 'test@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+            'terms' => true,
+        ]);
+
+        // Assert
+        $this->assertAuthenticated();
+        $response->assertRedirect(RouteServiceProvider::HOME);
+        Log::assertLogged(fn (LogEntry $log) => $log->level === 'error'
+            && $log->message === 'Invalid role in invitation'
+            && $log->context === [
+                'invitation' => $organizationInvitation->getKey(),
+                'role' => 'invalid-role',
+            ]);
+        $newUser = User::where('email', 'test@example.com')->firstOrFail();
+        $this->assertDatabaseHas(OrganizationInvitation::class, [
+            'id' => $organizationInvitation->getKey(),
+            'email' => 'test@example.com',
+            'role' => 'invalid-role',
+        ]);
+        $this->assertDatabaseMissing(Member::class, [
+            'organization_id' => $user->organization->getKey(),
+            'user_id' => $newUser->getKey(),
+        ]);
+        $organizations = $newUser->organizations;
+        $this->assertCount(1, $organizations);
+        $this->assertNotSame($user->organization->id, $organizations->first()->id);
     }
 }

@@ -3,7 +3,7 @@ import MainContainer from '@/packages/ui/src/MainContainer.vue';
 import PageTitle from '@/Components/Common/PageTitle.vue';
 import { ChartBarIcon } from '@heroicons/vue/20/solid';
 import ReportingChart from '@/Components/Common/Reporting/ReportingChart.vue';
-import { formatHumanReadableDuration } from '@/packages/ui/src/utils/time';
+import { formatReportingDuration } from '@/packages/ui/src/utils/time';
 import ReportingRow from '@/Components/Common/Reporting/ReportingRow.vue';
 import ReportingPieChart from '@/Components/Common/Reporting/ReportingPieChart.vue';
 import { formatCents } from '@/packages/ui/src/utils/money';
@@ -116,25 +116,43 @@ const subGroup = computed(() => {
     }
     return 'project';
 });
-const { emptyPlaceholder } = useReportingStore();
+const { emptyPlaceholder, getNameForReportingRowEntry } = useReportingStore();
+
+/**
+ * The public report endpoint has no descriptor for time group types, so their labels are
+ * derived from the raw group key.
+ */
+function resolveLabel(
+    description: string | null | undefined,
+    key: string | null | undefined,
+    groupedType: string
+) {
+    if (description !== null && description !== undefined) {
+        return description;
+    }
+    return (
+        getNameForReportingRowEntry(key ?? null, groupedType, reportDateFormat.value) ??
+        emptyPlaceholder[groupedType] ??
+        ''
+    );
+}
 
 const groupedPieChartData = computed(() => {
     return (
         aggregatedTableTimeEntries.value?.grouped_data?.map((entry) => {
-            if (entry.description === null) {
+            const groupedType = aggregatedTableTimeEntries.value?.grouped_type ?? 'project';
+            const name = resolveLabel(entry.description, entry.key, groupedType);
+            if (name === emptyPlaceholder[groupedType]) {
                 return {
                     value: entry.seconds,
-                    name:
-                        emptyPlaceholder[
-                            aggregatedTableTimeEntries.value?.grouped_type ?? 'project'
-                        ] ?? '',
+                    name: name,
                     color: '#CCCCCC',
                 };
             }
             return {
                 value: entry.seconds,
-                name: entry.description,
-                color: entry.color ?? getRandomColorWithSeed(entry.description ?? 'none'),
+                name: name,
+                color: entry.color ?? getRandomColorWithSeed(name),
             };
         }) ?? []
     );
@@ -143,21 +161,25 @@ const groupedPieChartData = computed(() => {
 const tableData = computed(() => {
     return aggregatedTableTimeEntries.value?.grouped_data?.map((entry) => {
         return {
+            key: entry.key,
             seconds: entry.seconds,
             cost: entry.cost,
-            description:
-                entry.description ??
-                emptyPlaceholder[aggregatedTableTimeEntries.value?.grouped_type ?? 'project'] ??
-                '',
+            description: resolveLabel(
+                entry.description,
+                entry.key,
+                aggregatedTableTimeEntries.value?.grouped_type ?? 'project'
+            ),
             grouped_data:
                 entry.grouped_data?.map((el) => {
                     return {
+                        key: el.key,
                         seconds: el.seconds,
                         cost: el.cost,
-                        description:
-                            el.description ??
-                            emptyPlaceholder[entry.grouped_type ?? 'project'] ??
-                            '',
+                        description: resolveLabel(
+                            el.description,
+                            el.key,
+                            entry.grouped_type ?? 'project'
+                        ),
                     };
                 }) ?? [],
         };
@@ -219,7 +241,7 @@ onMounted(async () => {
                             ">
                             <ReportingRow
                                 v-for="entry in tableData"
-                                :key="entry.description ?? 'none'"
+                                :key="entry.key ?? 'none'"
                                 :currency="reportCurrency"
                                 :currency-format="reportCurrencyFormat"
                                 :show-cost="true"
@@ -231,7 +253,7 @@ onMounted(async () => {
                                 </div>
                                 <div class="justify-end flex items-center font-medium">
                                     {{
-                                        formatHumanReadableDuration(
+                                        formatReportingDuration(
                                             aggregatedTableTimeEntries.seconds,
                                             reportIntervalFormat,
                                             reportNumberFormat

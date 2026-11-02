@@ -12,17 +12,21 @@ import ClientDropdown from '@/packages/ui/src/Client/ClientDropdown.vue';
 import { useClientsQuery } from '@/utils/useClientsQuery';
 import ProjectColorSelector from '@/packages/ui/src/Project/ProjectColorSelector.vue';
 import { Button } from '@/packages/ui/src/Buttons';
-import { ChevronDown } from 'lucide-vue-next';
+import { ChevronDown } from '@lucide/vue';
 import { UserCircleIcon } from '@heroicons/vue/20/solid';
 import EstimatedTimeSection from '@/packages/ui/src/EstimatedTimeSection.vue';
 import { Field, FieldGroup, FieldLabel } from '@/packages/ui/src/field';
 import ProjectBillableRateModal from '@/packages/ui/src/Project/ProjectBillableRateModal.vue';
 import { getOrganizationCurrencyString } from '@/utils/money';
 import ProjectEditBillableSection from '@/packages/ui/src/Project/ProjectEditBillableSection.vue';
+import ProjectVisibilitySelect from '@/packages/ui/src/Project/ProjectVisibilitySelect.vue';
 import { isAllowedToPerformPremiumAction } from '@/utils/billing';
+import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
+import { getCurrentOrganizationId } from '@/utils/useUser';
 
 const { updateProject } = useProjectsStore();
 const { clients } = useClientsQuery();
+const { organization } = useOrganizationQuery(getCurrentOrganizationId()!);
 const show = defineModel('show', { default: false });
 const saving = ref(false);
 const showBillableRateModal = ref(false);
@@ -41,6 +45,7 @@ const project = ref<CreateProjectBody>({
     billable_rate: props.originalProject.billable_rate,
     is_billable: props.originalProject.is_billable,
     estimated_time: props.originalProject.estimated_time,
+    is_public: props.originalProject.is_public,
 });
 
 async function submit() {
@@ -74,7 +79,7 @@ async function submitBillableRate() {
 </script>
 
 <template>
-    <DialogModal closeable :show="show" @close="show = false">
+    <DialogModal closeable :show="show" @close="show = false" @submit="submit">
         <template #title>
             <div class="flex space-x-2">
                 <span> Edit Project {{ props.originalProject.name }} </span>
@@ -117,11 +122,13 @@ async function submitBillableRate() {
                     v-model:is-billable="project.is_billable"
                     v-model:billable-rate="project.billable_rate"
                     :currency="getOrganizationCurrencyString()"
+                    :organization-billable-rate="organization?.billable_rate ?? null"
                     @submit="submit"></ProjectEditBillableSection>
                 <EstimatedTimeSection
                     v-if="isAllowedToPerformPremiumAction()"
                     v-model="project.estimated_time"
                     @submit="submit()"></EstimatedTimeSection>
+                <ProjectVisibilitySelect v-model="project.is_public"></ProjectVisibilitySelect>
             </FieldGroup>
         </template>
         <template #footer>

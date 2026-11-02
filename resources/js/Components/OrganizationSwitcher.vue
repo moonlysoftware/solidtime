@@ -17,15 +17,9 @@ import {
     DropdownMenuContent,
     DropdownMenuItem,
     DropdownMenuLabel,
-} from '@/Components/ui/dropdown-menu';
+} from '@/packages/ui/src';
 
 const page = usePage<{
-    jetstream: {
-        canCreateTeams: boolean;
-        hasTeamFeatures: boolean;
-        managesProfilePhotos: boolean;
-        hasApiFeatures: boolean;
-    };
     auth: {
         user: User & {
             all_teams: Organization[];
@@ -39,7 +33,7 @@ const switchToTeam = (organization: Organization) => {
 </script>
 
 <template>
-    <DropdownMenu v-if="page.props.jetstream.hasTeamFeatures">
+    <DropdownMenu>
         <DropdownMenuTrigger
             class="flex w-full text-left hover:bg-white/10 focus-visible:ring-2 focus-visible:ring-ring cursor-pointer transition pl-2 py-1 rounded w-full items-center justify-between"
             as-child>
@@ -67,7 +61,7 @@ const switchToTeam = (organization: Organization) => {
 
                 <DropdownMenuItem as-child>
                     <Link
-                        :href="route('teams.show', page.props.auth.user.current_team.id)"
+                        :href="route('organizations.show', page.props.auth.user.current_team.id)"
                         class="inline-flex items-center gap-2.5 w-full">
                         <Cog6ToothIcon class="w-5 h-5 text-icon-default" />
                         <span>Organization Settings</span>
@@ -78,9 +72,9 @@ const switchToTeam = (organization: Organization) => {
                     <Link href="/billing" class="inline-flex items-center w-full"> Billing </Link>
                 </DropdownMenuItem>
 
-                <DropdownMenuItem v-if="page.props.jetstream.canCreateTeams" as-child>
+                <DropdownMenuItem as-child>
                     <Link
-                        :href="route('teams.create')"
+                        :href="route('organizations.create')"
                         class="inline-flex items-center gap-2.5 w-full">
                         <PlusCircleIcon class="w-5 h-5 text-icon-default" />
                         <span>Create new organization</span>

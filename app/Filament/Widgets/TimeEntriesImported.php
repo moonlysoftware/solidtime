@@ -11,7 +11,7 @@ use Flowframe\Trend\TrendValue;
 
 class TimeEntriesImported extends ChartWidget
 {
-    protected static ?string $heading = 'Time Entries Imported';
+    protected ?string $heading = 'Time Entries Imported';
 
     public ?string $filter = 'week';
 
@@ -25,7 +25,7 @@ class TimeEntriesImported extends ChartWidget
         } elseif ($filter === 'month') {
             $start = now()->subMonth();
         } elseif ($filter === 'year') {
-            $start = now()->subYear();
+            $start = now()->subYear()->startOfMonth();
         } else {
             $start = now()->subWeek();
         }
@@ -53,7 +53,7 @@ class TimeEntriesImported extends ChartWidget
         return [
             'datasets' => [
                 [
-                    'label' => self::$heading,
+                    'label' => $this->heading,
                     'data' => $data->map(fn (TrendValue $value) => $value->aggregate),
                 ],
             ],

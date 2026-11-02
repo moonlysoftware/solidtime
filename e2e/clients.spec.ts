@@ -8,7 +8,7 @@ import {
     createProjectViaApi,
     createPublicProjectViaApi,
 } from './utils/api';
-import { getTableRowNames } from './utils/table';
+import { clearTableState, getTableRowNames } from './utils/table';
 
 async function goToClientsOverview(page: Page) {
     await page.goto(PLAYWRIGHT_BASE_URL + '/clients');
@@ -133,21 +133,89 @@ test('test that deleting a client via actions menu works', async ({ page, ctx })
 });
 
 // =============================================
-// Sorting Tests
+// Context Menu Tests
 // =============================================
 
-async function clearClientTableState(page: Page) {
-    await page.evaluate(() => {
-        localStorage.removeItem('client-table-state');
-    });
-}
+test('test that client context menu edit updates the client', async ({ page, ctx }) => {
+    const clientName = 'CtxEditClient ' + Math.floor(1 + Math.random() * 10000);
+    const updatedName = 'CtxUpdatedClient ' + Math.floor(1 + Math.random() * 10000);
+    await createClientViaApi(ctx, { name: clientName });
+    await goToClientsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: clientName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await page.getByRole('menuitem', { name: 'Edit' }).click();
+    await expect(page.getByRole('dialog')).toBeVisible();
+
+    await page.getByPlaceholder('Client Name').fill(updatedName);
+    await Promise.all([
+        page.getByRole('button', { name: 'Update Client' }).click(),
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/clients') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+    ]);
+
+    await expect(page.getByTestId('client_table')).toContainText(updatedName);
+    await expect(page.getByTestId('client_table')).not.toContainText(clientName);
+});
+
+test('test that client context menu archive archives the client', async ({ page, ctx }) => {
+    const clientName = 'CtxArchiveClient ' + Math.floor(1 + Math.random() * 10000);
+    await createClientViaApi(ctx, { name: clientName });
+    await goToClientsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: clientName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/clients') &&
+                response.request().method() === 'PUT' &&
+                response.status() === 200
+        ),
+        page.getByRole('menuitem', { name: 'Archive' }).click(),
+    ]);
+    await expect(page.getByTestId('client_table')).not.toContainText(clientName);
+});
+
+test('test that client context menu delete deletes the client', async ({ page, ctx }) => {
+    const clientName = 'CtxDeleteClient ' + Math.floor(1 + Math.random() * 10000);
+    await createClientViaApi(ctx, { name: clientName });
+    await goToClientsOverview(page);
+
+    const row = page.getByRole('row').filter({ hasText: clientName }).first();
+    await expect(row).toBeVisible();
+    await row.click({ button: 'right' });
+    await expect(page.getByRole('menu')).toBeVisible();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/clients') &&
+                response.request().method() === 'DELETE' &&
+                response.status() === 204
+        ),
+        page.getByRole('menuitem', { name: 'Delete' }).click(),
+    ]);
+    await expect(page.getByTestId('client_table')).not.toContainText(clientName);
+});
+
+// =============================================
+// Sorting Tests
+// =============================================
 
 test('test that sorting clients by name and status works', async ({ page, ctx }) => {
     await createClientViaApi(ctx, { name: 'AAA SortClient' });
     await createClientViaApi(ctx, { name: 'ZZZ SortClient' });
 
     await goToClientsOverview(page);
-    await clearClientTableState(page);
+    await clearTableState(page, 'client-table-state');
     await page.reload();
 
     const table = page.getByTestId('client_table');
@@ -172,14 +240,14 @@ test('test that sorting clients by name and status works', async ({ page, ctx })
 
 test('test that sorting clients by project count works', async ({ page, ctx }) => {
     const clientWithMany = await createClientViaApi(ctx, { name: 'ManyProjects Client' });
-    const clientWithNone = await createClientViaApi(ctx, { name: 'NoProjects Client' });
+    await createClientViaApi(ctx, { name: 'NoProjects Client' });
 
     // Create projects for the first client
     await createProjectViaApi(ctx, { name: 'Proj1', client_id: clientWithMany.id });
     await createProjectViaApi(ctx, { name: 'Proj2', client_id: clientWithMany.id });
 
     await goToClientsOverview(page);
-    await clearClientTableState(page);
+    await clearTableState(page, 'client-table-state');
     await page.reload();
 
     const table = page.getByTestId('client_table');
@@ -200,7 +268,7 @@ test('test that sorting clients by project count works', async ({ page, ctx }) =
 
 test('test that client sort state persists after page reload', async ({ page }) => {
     await goToClientsOverview(page);
-    await clearClientTableState(page);
+    await clearTableState(page, 'client-table-state');
     await page.reload();
 
     const table = page.getByTestId('client_table');
@@ -298,5 +366,121 @@ test.describe('Employee Clients Restrictions', () => {
 
         // Employee can see the client because they are a member of its private project
         await expect(employee.page.getByText(clientName)).toBeVisible({ timeout: 10000 });
+    });
+});
+
+// ──────────────────────────────────────────────────
+// Pagination Tests
+// ──────────────────────────────────────────────────
+
+test.describe('Clients Pagination', () => {
+    test.describe.configure({ timeout: 30000 });
+
+    test('test that client table paginates when there are more than 15 clients', async ({
+        page,
+        ctx,
+    }) => {
+        // Create 17 clients with zero-padded names so alphabetical sort is predictable.
+        // Page size is 15 → page 1 shows indices 00–14, page 2 shows 15–16.
+        const seed = Math.floor(Math.random() * 100000);
+        const prefix = `PaginationClient ${seed} `;
+        await Promise.all(
+            Array.from({ length: 17 }, (_, i) =>
+                createClientViaApi(ctx, { name: prefix + String(i).padStart(2, '0') })
+            )
+        );
+
+        await goToClientsOverview(page);
+        await clearTableState(page, 'client-table-state');
+        await page.reload();
+
+        // Default sort is name asc; first 15 clients (00–14) on page 1.
+        await expect(page.getByText(prefix + '00')).toBeVisible({ timeout: 10000 });
+        await expect(page.getByRole('button', { name: 'Next Page' })).toBeVisible();
+        // Client 15 should be on page 2, not visible on page 1.
+        await expect(page.getByText(prefix + '15')).not.toBeVisible();
+
+        // Exactly 15 data rows mounted on page 1.
+        await expect(page.getByRole('row')).toHaveCount(15);
+
+        // Navigation to page 2.
+        await page.getByRole('button', { name: 'Next Page' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        await expect(page.getByText(prefix + '00')).not.toBeVisible();
+        // Page 2 contains the remaining 2 clients.
+        await expect(page.getByRole('row')).toHaveCount(2);
+
+        // Back to page 1 via Previous Page.
+        await page.getByRole('button', { name: 'Previous Page' }).click();
+        await expect(page.getByText(prefix + '00')).toBeVisible();
+        await expect(page.getByText(prefix + '15')).not.toBeVisible();
+
+        // First / Last page jumps.
+        await page.getByRole('button', { name: 'Last Page' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        await page.getByRole('button', { name: 'First Page' }).click();
+        await expect(page.getByText(prefix + '00')).toBeVisible();
+        await expect(page.getByText(prefix + '15')).not.toBeVisible();
+
+        // Direct page-number button navigation + selected state.
+        await page.getByRole('button', { name: 'Page 2' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Page 2' })).toHaveAttribute(
+            'aria-current',
+            'page'
+        );
+    });
+
+    test('test that client pagination is not shown when there are 15 or fewer clients', async ({
+        page,
+        ctx,
+    }) => {
+        await Promise.all(
+            Array.from({ length: 10 }, (_, i) =>
+                createClientViaApi(ctx, {
+                    name: `FewClient ${Math.floor(Math.random() * 100000)} ${i}`,
+                })
+            )
+        );
+
+        await goToClientsOverview(page);
+        await clearTableState(page, 'client-table-state');
+        await page.reload();
+
+        await expect(page.getByTestId('client_table')).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Next Page' })).toHaveCount(0);
+    });
+
+    test('test that changing the sort resets client pagination to page 1', async ({
+        page,
+        ctx,
+    }) => {
+        const seed = Math.floor(Math.random() * 100000);
+        const prefix = `SortPagClient ${seed} `;
+        await Promise.all(
+            Array.from({ length: 17 }, (_, i) =>
+                createClientViaApi(ctx, { name: prefix + String(i).padStart(2, '0') })
+            )
+        );
+
+        await goToClientsOverview(page);
+        await clearTableState(page, 'client-table-state');
+        await page.reload();
+
+        await expect(page.getByText(prefix + '00')).toBeVisible({ timeout: 10000 });
+
+        // Go to page 2.
+        await page.getByRole('button', { name: 'Next Page' }).click();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+
+        // Sort by name descending.
+        const table = page.getByTestId('client_table');
+        const nameHeader = table.getByText('Name').first();
+        await nameHeader.click();
+
+        // Pagination reset to page 1; desc order → 16, 15 visible, 00 on page 2.
+        await expect(page.getByText(prefix + '16')).toBeVisible();
+        await expect(page.getByText(prefix + '15')).toBeVisible();
+        await expect(page.getByText(prefix + '00')).not.toBeVisible();
     });
 });

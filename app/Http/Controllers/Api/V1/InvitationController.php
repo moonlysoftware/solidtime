@@ -9,7 +9,6 @@ use App\Exceptions\Api\UserIsAlreadyMemberOfOrganizationApiException;
 use App\Http\Requests\V1\Invitation\InvitationIndexRequest;
 use App\Http\Requests\V1\Invitation\InvitationStoreRequest;
 use App\Http\Resources\V1\Invitation\InvitationCollection;
-use App\Http\Resources\V1\Invitation\InvitationResource;
 use App\Models\Organization;
 use App\Models\OrganizationInvitation;
 use App\Service\InvitationService;
@@ -30,8 +29,6 @@ class InvitationController extends Controller
     /**
      * List all invitations of an organization
      *
-     * @return InvitationCollection<InvitationResource>
-     *
      * @throws AuthorizationException
      *
      * @operationId getInvitations
@@ -40,8 +37,9 @@ class InvitationController extends Controller
     {
         $this->checkPermission($organization, 'invitations:view');
 
-        $invitations = $organization->teamInvitations()
+        $invitations = $organization->organizationInvitations()
             ->orderBy('created_at', 'desc')
+            ->orderBy('id')
             ->paginate(config('app.pagination_per_page_default'));
 
         return InvitationCollection::make($invitations);
@@ -63,7 +61,7 @@ class InvitationController extends Controller
         $email = $request->getEmail();
         $role = $request->getRole();
 
-        $invitationService->inviteUser($organization, $email, $role);
+        $invitationService->inviteUser($organization, $email, $role, $this->user());
 
         return response()->json(null, 204);
     }
@@ -86,6 +84,8 @@ class InvitationController extends Controller
 
     /**
      * Remove a pending invitation
+     *
+     * This revokes the invitation: the link in the invitation email stops working. Find the invitation ID with `GET /organizations/{organization}/invitations`.
      *
      * @throws AuthorizationException
      *

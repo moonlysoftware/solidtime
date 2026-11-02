@@ -7,9 +7,14 @@ namespace Tests\Unit\Service;
 use App\Enums\Role;
 use App\Events\BeforeOrganizationDeletion;
 use App\Exceptions\Api\CanNotDeleteUserWhoIsOwnerOfOrganizationWithMultipleMembers;
+use App\Models\Audit;
 use App\Models\Client;
+use App\Models\Goal;
 use App\Models\Member;
 use App\Models\Organization;
+use App\Models\Passport\Client as PassportClient;
+use App\Models\Passport\RefreshToken;
+use App\Models\Passport\Token;
 use App\Models\Project;
 use App\Models\ProjectMember;
 use App\Models\Report;
@@ -23,6 +28,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\CoversClass;
 use Tests\TestCaseWithDatabase;
 use TiMacDonald\Log\LogEntry;
@@ -55,7 +61,8 @@ class DeletionServiceTest extends TestCaseWithDatabase
      *     tasks: Collection<Task>,
      *     timeEntries: Collection<TimeEntry>,
      *     owner: User,
-     *     reports: Collection<Report>
+     *     reports: Collection<Report>,
+     *     goals: Collection<Goal>
      * }
      */
     private function createOrganizationWithAllRelations(): object
@@ -100,6 +107,10 @@ class DeletionServiceTest extends TestCaseWithDatabase
         $report2 = Report::factory()->forOrganization($organization)->create();
         $reports = collect([$report1, $report2]);
 
+        $goal1 = Goal::factory()->forMember($memberOwner)->create();
+        $goal2 = Goal::factory()->forMember($memberEmployee)->create();
+        $goals = collect([$goal1, $goal2]);
+
         $timeEntries = TimeEntry::factory()->forOrganization($organization)->forMember($memberOwner)->createMany(2);
         $timeEntriesWithTask = TimeEntry::factory()->forTask($task1)->forOrganization($organization)->forMember($memberEmployee)->createMany(2);
         $timeEntriesWithProject = TimeEntry::factory()->forProject($projectWithClient)->forOrganization($organization)->forMember($memberPlaceholder)->createMany(2);
@@ -116,6 +127,7 @@ class DeletionServiceTest extends TestCaseWithDatabase
             'timeEntries' => $timeEntries,
             'owner' => $userOwner,
             'reports' => $reports,
+            'goals' => $goals,
         ];
     }
 
@@ -132,6 +144,7 @@ class DeletionServiceTest extends TestCaseWithDatabase
         $this->assertSame(0, Member::query()->whereBelongsTo($organization, 'organization')->count());
         $this->assertSame(0, Task::query()->whereBelongsTo($organization, 'organization')->count());
         $this->assertSame(0, Report::query()->whereBelongsTo($organization, 'organization')->count());
+        $this->assertSame(0, Goal::query()->whereBelongsTo($organization, 'organization')->count());
         $this->assertSame(0, TimeEntry::query()->whereBelongsTo($organization, 'organization')->count());
     }
 
@@ -145,6 +158,7 @@ class DeletionServiceTest extends TestCaseWithDatabase
         $this->assertSame(3, Member::query()->whereBelongsTo($organization, 'organization')->count());
         $this->assertSame(2, Task::query()->whereBelongsTo($organization, 'organization')->count());
         $this->assertSame(2, Report::query()->whereBelongsTo($organization, 'organization')->count());
+        $this->assertSame(2, Goal::query()->whereBelongsTo($organization, 'organization')->count());
         $this->assertSame($specialCase ? 7 : 6, TimeEntry::query()->whereBelongsTo($organization, 'organization')->count());
     }
 
@@ -178,6 +192,8 @@ class DeletionServiceTest extends TestCaseWithDatabase
         // Assert
         $this->assertOrganizationDeleted($organization->organization);
         $this->assertOrganizationNothingDeleted($otherOrganization->organization);
+        $this->assertSame(0, Audit::query()->where('owner_organization_id', $organization->organization->getKey())->count());
+        $this->assertGreaterThan(0, Audit::query()->where('owner_organization_id', $otherOrganization->organization->getKey())->count());
         Log::assertLoggedTimes(fn (LogEntry $log) => $log->level === 'debug'
             && $log->message === 'Start deleting organization'
             && $log->context['organization_id'] === $organization->organization->getKey(),
@@ -314,6 +330,10 @@ class DeletionServiceTest extends TestCaseWithDatabase
         $this->assertDatabaseMissing(Member::class, [
             'user_id' => $user->getKey(),
         ]);
+        $this->assertSame(0, Audit::query()->where('owner_user_id', $user->getKey())->count());
+        $this->assertSame(0, Audit::query()->where('owner_organization_id', $user->current_team_id)->count());
+        $this->assertGreaterThan(0, Audit::query()->where('owner_user_id', $otherUser->getKey())->count());
+        $this->assertGreaterThan(0, Audit::query()->where('owner_organization_id', $otherUser->current_team_id)->count());
         Storage::disk(config('filesystems.public'))->assertMissing($user->profile_photo_path);
         Storage::disk(config('filesystems.public'))->assertExists($otherUser->profile_photo_path);
         Log::assertLoggedTimes(fn (LogEntry $log) => $log->level === 'debug'
@@ -326,6 +346,24 @@ class DeletionServiceTest extends TestCaseWithDatabase
             && $log->context['id'] === $user->getKey(),
             1
         );
+    }
+
+    public function test_delete_user_keeps_audits_of_other_organizations_where_the_user_is_the_actor(): void
+    {
+        // Arrange
+        $user = User::factory()->withPersonalOrganization()->create();
+        $otherOrganization = Organization::factory()->create();
+        $audit = Audit::factory()->auditUser($user)->auditFor($otherOrganization)->create([
+            'owner_organization_id' => $otherOrganization->getKey(),
+        ]);
+
+        // Act
+        $this->deletionService->deleteUser($user);
+
+        // Assert
+        $audit->refresh();
+        $this->assertSame($user->getKey(), $audit->actor_id);
+        $this->assertSame($otherOrganization->getKey(), $audit->owner_organization_id);
     }
 
     public function test_delete_user_deletes_owned_organizations_that_have_only_one_member_and_makes_makes_the_user_placeholder_in_not_owned_organizations(): void
@@ -412,15 +450,57 @@ class DeletionServiceTest extends TestCaseWithDatabase
         $this->assertDatabaseHas(Organization::class, [
             'id' => $organizationOfA->getKey(),
         ]);
-        // The placeholder user should exist with current_team_id set to the org where they are a placeholder
+        // The placeholder user should exist and must not reference the deleted organization,
+        // which is what caused the foreign key violation in #989
         $placeholderUser = User::query()->where('is_placeholder', true)->first();
         $this->assertNotNull($placeholderUser);
-        $this->assertSame($organizationOfA->getKey(), $placeholderUser->current_team_id);
+        $this->assertNull($placeholderUser->current_team_id);
         $this->assertDatabaseHas(Member::class, [
             'id' => $memberBInOrgA->getKey(),
             'user_id' => $placeholderUser->getKey(),
             'organization_id' => $organizationOfA->getKey(),
             'role' => Role::Placeholder->value,
+        ]);
+    }
+
+    public function test_delete_user_deletes_access_tokens_and_their_refresh_tokens_but_does_not_delete_tokens_of_other_users(): void
+    {
+        // Arrange
+        $user = User::factory()->create();
+        $otherUser = User::factory()->create();
+        $passportClient = PassportClient::factory()->create();
+
+        $userToken = Token::factory()->forUser($user)->forClient($passportClient)->create();
+        $userRefreshToken = RefreshToken::query()->create([
+            'id' => Str::random(100),
+            'access_token_id' => $userToken->getKey(),
+            'revoked' => false,
+            'expires_at' => now()->addDays(30),
+        ]);
+
+        $otherUserToken = Token::factory()->forUser($otherUser)->forClient($passportClient)->create();
+        $otherUserRefreshToken = RefreshToken::query()->create([
+            'id' => Str::random(100),
+            'access_token_id' => $otherUserToken->getKey(),
+            'revoked' => false,
+            'expires_at' => now()->addDays(30),
+        ]);
+
+        // Act
+        $this->deletionService->deleteUser($user);
+
+        // Assert
+        $this->assertDatabaseMissing(Token::class, [
+            'id' => $userToken->getKey(),
+        ]);
+        $this->assertDatabaseMissing(RefreshToken::class, [
+            'id' => $userRefreshToken->getKey(),
+        ]);
+        $this->assertDatabaseHas(Token::class, [
+            'id' => $otherUserToken->getKey(),
+        ]);
+        $this->assertDatabaseHas(RefreshToken::class, [
+            'id' => $otherUserRefreshToken->getKey(),
         ]);
     }
 }

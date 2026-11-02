@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { UserGroupIcon, CheckCircleIcon } from '@heroicons/vue/16/solid';
+import { ref } from 'vue';
+import { UserGroupIcon, CheckCircleIcon, GlobeAltIcon } from '@heroicons/vue/16/solid';
 import ListFilterIcon from '@/packages/ui/src/Icons/ListFilterIcon.vue';
 import {
     DropdownMenu,
@@ -12,13 +12,14 @@ import {
     DropdownMenuSubContent,
     DropdownMenuCheckboxItem,
     DropdownMenuSeparator,
-} from '@/Components/ui/dropdown-menu';
+} from '@/packages/ui/src';
 import { Button } from '@/packages/ui/src';
 import type { Client } from '@/packages/api/src';
 import { NO_CLIENT_ID } from './constants';
 
 export interface ProjectFilters {
     status: 'active' | 'archived' | 'all';
+    visibility: 'public' | 'private' | 'all';
     clientIds: string[];
 }
 
@@ -36,12 +37,25 @@ const statusOptions = [
     { id: 'archived' as const, name: 'Archived' },
 ];
 
+const visibilityOptions = [
+    { id: 'public' as const, name: 'Public' },
+    { id: 'private' as const, name: 'Private' },
+];
+
 const open = ref(false);
 
 function updateStatus(status: 'active' | 'archived' | 'all') {
     emit('update:filters', {
         ...props.filters,
         status,
+    });
+    open.value = false;
+}
+
+function updateVisibility(visibility: 'public' | 'private' | 'all') {
+    emit('update:filters', {
+        ...props.filters,
+        visibility,
     });
     open.value = false;
 }
@@ -67,19 +81,18 @@ function toggleNoClient() {
         clientIds,
     });
 }
-
-const hasActiveFilters = computed(() => {
-    return props.filters.status !== 'all' || props.filters.clientIds.length > 0;
-});
 </script>
 
 <template>
     <DropdownMenu v-model:open="open">
         <DropdownMenuTrigger as-child>
-            <Button variant="ghost" size="xs" aria-label="Filter projects">
-                <ListFilterIcon
-                    :class="[hasActiveFilters ? '' : '-ml-0.5', 'h-4 w-4 text-icon-default']" />
-                <span v-if="!hasActiveFilters" class="text-nowrap">Filter</span>
+            <!-- -ml-1.5 cancels the icon's inset inside the button so it sits flush with the toolbar's left padding -->
+            <Button
+                variant="ghost"
+                size="icon"
+                class="-ml-1.5 h-7 w-7 flex-shrink-0"
+                aria-label="Filter projects">
+                <ListFilterIcon class="h-4 w-4 text-icon-default" />
             </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" class="w-56">
@@ -97,6 +110,25 @@ const hasActiveFilters = computed(() => {
                             filters.status === option.id && 'bg-accent text-accent-foreground',
                         ]"
                         @click="updateStatus(option.id)">
+                        {{ option.name }}
+                    </DropdownMenuItem>
+                </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
+            <!-- Visibility Filter -->
+            <DropdownMenuSub>
+                <DropdownMenuSubTrigger class="gap-2">
+                    <GlobeAltIcon class="h-4 w-4 text-icon-default" />
+                    <span>Visibility</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                    <DropdownMenuItem
+                        v-for="option in visibilityOptions"
+                        :key="option.id"
+                        :class="[
+                            filters.visibility === option.id && 'bg-accent text-accent-foreground',
+                        ]"
+                        @click="updateVisibility(option.id)">
                         {{ option.name }}
                     </DropdownMenuItem>
                 </DropdownMenuSubContent>

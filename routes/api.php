@@ -2,11 +2,13 @@
 
 declare(strict_types=1);
 
+use App\Http\Controllers\Api\FallbackController;
 use App\Http\Controllers\Api\V1\ApiTokenController;
 use App\Http\Controllers\Api\V1\ChartController;
 use App\Http\Controllers\Api\V1\ClientController;
 use App\Http\Controllers\Api\V1\CurrencyController;
 use App\Http\Controllers\Api\V1\ExportController;
+use App\Http\Controllers\Api\V1\GoalController;
 use App\Http\Controllers\Api\V1\ImportController;
 use App\Http\Controllers\Api\V1\InvitationController;
 use App\Http\Controllers\Api\V1\MemberController;
@@ -18,11 +20,11 @@ use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\TagController;
 use App\Http\Controllers\Api\V1\TaskController;
 use App\Http\Controllers\Api\V1\TimeEntryController;
+use App\Http\Controllers\Api\V1\TimeZoneController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\UserMembershipController;
 use App\Http\Controllers\Api\V1\UserTimeEntryController;
 use Illuminate\Support\Facades\Route;
-use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /*
 |--------------------------------------------------------------------------
@@ -42,8 +44,10 @@ Route::prefix('v1')->name('v1.')->group(static function (): void {
     ])->group(static function (): void {
         // Organization routes
         Route::name('organizations.')->group(static function (): void {
+            Route::post('/organizations', [OrganizationController::class, 'store'])->name('store');
             Route::get('/organizations/{organization}', [OrganizationController::class, 'show'])->name('show');
             Route::put('/organizations/{organization}', [OrganizationController::class, 'update'])->name('update');
+            Route::delete('/organizations/{organization}', [OrganizationController::class, 'destroy'])->name('destroy');
         });
 
         // Member routes
@@ -59,6 +63,11 @@ Route::prefix('v1')->name('v1.')->group(static function (): void {
         // User routes
         Route::name('users.')->group(static function (): void {
             Route::get('/users/me', [UserController::class, 'me'])->name('me');
+            Route::put('/users/me/current-organization', [UserController::class, 'updateMyCurrentOrganization'])->name('update-current-organization');
+            Route::put('/users/{user}', [UserController::class, 'update'])->name('update');
+            Route::post('/users/{user}/resend-email-verification', [UserController::class, 'resendEmailVerification'])->name('resend-email-verification');
+            Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('destroy');
+            Route::post('/users/{user}/reset-pending-email', [UserController::class, 'resetPendingEmail'])->name('reset-pending-email');
         });
 
         // Api token routes
@@ -126,6 +135,15 @@ Route::prefix('v1')->name('v1.')->group(static function (): void {
             Route::delete('/reports/{report}', [ReportController::class, 'destroy'])->name('destroy');
         });
 
+        // Goal routes
+        Route::name('goals.')->prefix('/organizations/{organization}')->group(static function (): void {
+            Route::get('/goals', [GoalController::class, 'index'])->name('index');
+            Route::get('/goals/{goal}', [GoalController::class, 'show'])->name('show');
+            Route::post('/goals', [GoalController::class, 'store'])->name('store');
+            Route::put('/goals/{goal}', [GoalController::class, 'update'])->name('update');
+            Route::delete('/goals/{goal}', [GoalController::class, 'destroy'])->name('destroy');
+        });
+
         // Chart routes
         Route::name('charts.')->prefix('/organizations/{organization}/charts')->group(static function (): void {
             Route::get('/weekly-project-overview', [ChartController::class, 'weeklyProjectOverview'])->name('weekly-project-overview');
@@ -173,9 +191,14 @@ Route::prefix('v1')->name('v1.')->group(static function (): void {
         Route::name('export.')->prefix('/organizations/{organization}')->group(static function (): void {
             Route::post('/export', [ExportController::class, 'export'])->name('export');
         });
+
     });
 
+    // Currency routes
     Route::get('/currencies', [CurrencyController::class, 'index'])->name('currencies.index');
+
+    // Timezone routes
+    Route::get('/time-zones', [TimeZoneController::class, 'index'])->name('time-zones.index');
 
     // Public routes
     Route::name('public.')->prefix('/public')->group(static function (): void {
@@ -187,9 +210,5 @@ Route::prefix('v1')->name('v1.')->group(static function (): void {
  * Fallback routes, to prevent a rendered HTML page in /api/* routes
  * The / route is also included since the fallback is not triggered on the root route
  */
-Route::get('/', function (): void {
-    throw new NotFoundHttpException('API resource not found');
-});
-Route::fallback(function (): void {
-    throw new NotFoundHttpException('API resource not found');
-});
+Route::get('/', FallbackController::class);
+Route::fallback(FallbackController::class);

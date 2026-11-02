@@ -2,6 +2,7 @@
 import { ChevronRightIcon, ChevronDownIcon } from '@heroicons/vue/16/solid';
 import Dropdown from '@/packages/ui/src/Input/Dropdown.vue';
 import { computed, nextTick, ref, watch } from 'vue';
+import { useVirtualizer } from '@tanstack/vue-virtual';
 import ProjectDropdownItem from '@/packages/ui/src/Project/ProjectDropdownItem.vue';
 import type {
     CreateClientBody,
@@ -11,10 +12,12 @@ import type {
     Client,
 } from '@/packages/api/src';
 
-import { PlusIcon, PlusCircleIcon, MinusIcon, XMarkIcon } from '@heroicons/vue/16/solid';
+import { PlusCircleIcon, MinusIcon } from '@heroicons/vue/16/solid';
 import ProjectCreateModal from '@/packages/ui/src/Project/ProjectCreateModal.vue';
 import { twMerge } from 'tailwind-merge';
 import { Button } from '@/packages/ui/src/Buttons';
+
+const NO_PROJECT_ID = '';
 
 const task = defineModel<string | null>('task', {
     default: null,
@@ -27,7 +30,6 @@ const project = defineModel<string | null>('project', {
 const searchInput = ref<HTMLInputElement | null>(null);
 const open = ref(false);
 const dropdownViewport = ref<HTMLElement | null>(null);
-import { UseFocusTrap } from '@vueuse/integrations/useFocusTrap/component';
 
 const searchValue = ref('');
 
@@ -56,8 +58,9 @@ const props = withDefaults(
         createClient: (client: CreateClientBody) => Promise<Client | undefined>;
         currency: string;
         emptyPlaceholder?: string;
-        allowReset?: boolean;
+        noProjectValue?: string | null;
         enableEstimatedTime: boolean;
+        organizationBillableRate: number | null;
         canCreateProject: boolean;
         class?: string;
         variant?: 'input' | 'ghost' | 'outline';
@@ -66,86 +69,133 @@ const props = withDefaults(
     }>(),
     {
         emptyPlaceholder: 'No Project',
-        allowReset: false,
+        noProjectValue: NO_PROJECT_ID,
         variant: 'ghost',
         align: 'center',
         size: 'sm',
     }
 );
 
-const filteredResults = ref([] as ClientsWithProjectsWithTasks);
+const filteredResults = ref<ClientsWithProjectsWithTasks>([]);
 
 // computed filterProjects that flattens the first layer of filteredResults and combines all the projects
-const filteredProjects = computed(() => {
+const filteredProjects = computed<ProjectWithTasks[]>(() => {
     return filteredResults.value.map((client) => client.projects).flat();
+});
+
+type FlatRow =
+    | { kind: 'client'; key: string; name: string }
+    | { kind: 'project'; key: string; project: ProjectWithTasks }
+    | { kind: 'task'; key: string; task: Task };
+
+// Flatten the grouped client → project → task tree into a single ordered list so it can be
+// virtualized: only the rows currently inside the viewport are mounted, which keeps the
+// dropdown responsive even with thousands of projects/tasks.
+const flatRows = computed<FlatRow[]>(() => {
+    const rows: FlatRow[] = [];
+    for (const client of filteredResults.value) {
+        // The "No Project" group renders its project inline without a client header.
+        if (client.id !== 'no_project_no_client') {
+            rows.push({ kind: 'client', key: 'client-' + client.id, name: client.name });
+        }
+        for (const projectWithTasks of client.projects) {
+            rows.push({
+                kind: 'project',
+                key: 'project-' + projectWithTasks.id,
+                project: projectWithTasks,
+            });
+            if (projectWithTasks.expanded) {
+                for (const taskItem of projectWithTasks.tasks) {
+                    rows.push({ kind: 'task', key: 'task-' + taskItem.id, task: taskItem });
+                }
+            }
+        }
+    }
+    return rows;
+});
+
+const ROW_HEIGHT = { client: 28, project: 36, task: 32 } as const;
+
+const rowVirtualizer = useVirtualizer(
+    computed(() => ({
+        count: flatRows.value.length,
+        getScrollElement: () => dropdownViewport.value,
+        estimateSize: (index: number) => {
+            const row = flatRows.value[index];
+            if (row?.kind === 'client') return ROW_HEIGHT.client;
+            if (row?.kind === 'task') return ROW_HEIGHT.task;
+            return ROW_HEIGHT.project;
+        },
+        getItemKey: (index: number) => flatRows.value[index]?.key ?? index,
+        overscan: 12,
+    }))
+);
+
+const totalSize = computed(() => rowVirtualizer.value.getTotalSize());
+
+const visibleRows = computed(() =>
+    rowVirtualizer.value.getVirtualItems().map((virtualRow) => ({
+        virtualRow,
+        row: flatRows.value[virtualRow.index]!,
+    }))
+);
+
+// Lookup maps so filtering is O(projects + tasks + clients) instead of
+// O(projects × (tasks + clients)). They are rebuilt only when the underlying task/client
+// props change, not on every keystroke.
+const tasksByProject = computed(() => {
+    const map = new Map<string, Task[]>();
+    for (const taskItem of props.tasks) {
+        const list = map.get(taskItem.project_id);
+        if (list) {
+            list.push(taskItem);
+        } else {
+            map.set(taskItem.project_id, [taskItem]);
+        }
+    }
+    return map;
+});
+
+const clientsById = computed(() => {
+    const map = new Map<string, Client>();
+    for (const clientItem of props.clients) {
+        map.set(clientItem.id, clientItem);
+    }
+    return map;
 });
 
 function addProjectToFilterObject(
     tempFilteredClients: ClientsWithProjectsWithTasks,
+    groupIndexByKey: Map<string, number>,
     project: Project,
     filteredTasks: Task[],
     expanded = false
 ) {
-    // check if client already exists in filter array
-    const projectClientIndex = tempFilteredClients.findIndex(
-        (client) => client.id === project.client_id
-    );
+    const client = project.client_id ? clientsById.value.get(project.client_id) : undefined;
+    const groupKey = client ? client.id : 'no_client';
+    const newProject: ProjectWithTasks = { ...project, expanded, tasks: filteredTasks };
 
-    const client = props.clients.find((client) => client.id === project.client_id);
+    // O(1) group lookup instead of scanning the accumulating array for every project.
+    const existingIndex = groupIndexByKey.get(groupKey);
+    if (existingIndex !== undefined) {
+        tempFilteredClients[existingIndex]!.projects.push(newProject);
+        return;
+    }
 
-    if (projectClientIndex !== -1) {
-        // client already exists in filter array
-        tempFilteredClients[projectClientIndex]!.projects.push({
-            ...project,
-            expanded: expanded,
-            tasks: filteredTasks,
-        });
-    } else if (client) {
-        // project has client but is not already in filter array
-        // client is not yet in filter array
-        tempFilteredClients.push({
-            ...client,
-            projects: [
-                {
-                    ...project,
-                    expanded: expanded,
-                    tasks: filteredTasks,
-                },
-            ],
-        });
+    groupIndexByKey.set(groupKey, tempFilteredClients.length);
+    if (client) {
+        tempFilteredClients.push({ ...client, projects: [newProject] });
     } else {
-        // project has no client
-        const customNoClientId = 'no_client';
-        const noClientIndex = tempFilteredClients.findIndex(
-            (client) => client.id === customNoClientId
-        );
-
-        if (noClientIndex !== -1) {
-            // no client group already exists in filter array
-            tempFilteredClients[noClientIndex]!.projects.push({
-                ...project,
-                expanded: expanded,
-                tasks: filteredTasks,
-            });
-        } else {
-            // no client group is not yet in filter array
-            tempFilteredClients.push({
-                id: customNoClientId,
-                name: 'No Client',
-                color: 'var(--theme-color-icon-default)',
-                created_at: '',
-                updated_at: '',
-                value: '',
-                is_archived: false,
-                projects: [
-                    {
-                        ...project,
-                        expanded: expanded,
-                        tasks: filteredTasks,
-                    },
-                ],
-            });
-        }
+        tempFilteredClients.push({
+            id: 'no_client',
+            name: 'No Client',
+            color: 'var(--theme-color-icon-default)',
+            created_at: '',
+            updated_at: '',
+            value: '',
+            is_archived: false,
+            projects: [newProject],
+        });
     }
 }
 
@@ -163,10 +213,10 @@ function updateFilteredResults() {
             is_archived: false,
             projects: [
                 {
-                    id: '',
+                    id: NO_PROJECT_ID,
                     name: 'No Project',
                     color: 'var(--theme-color-icon-default)',
-                    value: '',
+                    value: NO_PROJECT_ID,
                     client_id: null,
                     billable_rate: null,
                     is_archived: false,
@@ -181,39 +231,50 @@ function updateFilteredResults() {
         });
     }
 
+    const searchTerm = searchValue.value?.toLowerCase()?.trim() || '';
+    const groupIndexByKey = new Map<string, number>();
+
     for (const filterProject of props.projects) {
-        const projectNameIncludesSearchTerm = filterProject.name
-            .toLowerCase()
-            .includes(searchValue.value?.toLowerCase()?.trim() || '');
+        const projectNameIncludesSearchTerm = filterProject.name.toLowerCase().includes(searchTerm);
 
-        const clientNameIncludesSearchTerm = props.clients
-            .find((client) => client.id === filterProject.client_id)
-            ?.name.toLowerCase()
-            .includes(searchValue.value?.toLowerCase()?.trim() || '');
+        const clientName = filterProject.client_id
+            ? clientsById.value.get(filterProject.client_id)?.name
+            : undefined;
+        const clientNameIncludesSearchTerm = clientName?.toLowerCase().includes(searchTerm);
 
-        // check if one of the project tasks
-        const projectTasks = props.tasks.filter((task) => {
-            return task.project_id === filterProject.id;
+        const projectTasks = tasksByProject.value.get(filterProject.id) ?? [];
+
+        // tasks that should be selectable regardless of the search term
+        // (open tasks, plus the currently selected one even if it's done)
+        const availableTasks = projectTasks.filter((filterTask) => {
+            return !filterTask.is_done || filterTask.id === task.value;
         });
 
-        const filteredTasks = projectTasks.filter((filterTask) => {
-            return (
-                filterTask.name
-                    .toLowerCase()
-                    .includes(searchValue.value?.toLowerCase()?.trim() || '') &&
-                (!filterTask.is_done || filterTask.id === task.value)
-            );
+        const filteredTasks = availableTasks.filter((filterTask) => {
+            return filterTask.name.toLowerCase().includes(searchTerm);
         });
 
         if (
             (projectNameIncludesSearchTerm || clientNameIncludesSearchTerm) &&
             (!filterProject.is_archived || project.value === filterProject.id)
         ) {
-            // search term matches project name
-            addProjectToFilterObject(tempFilteredClients, filterProject, filteredTasks, false);
+            // search term matches project (or client) name: show all the tasks
+            addProjectToFilterObject(
+                tempFilteredClients,
+                groupIndexByKey,
+                filterProject,
+                availableTasks,
+                false
+            );
         } else if (filteredTasks.length > 0 && !filterProject.is_archived) {
             // search term matches task name
-            addProjectToFilterObject(tempFilteredClients, filterProject, filteredTasks, true);
+            addProjectToFilterObject(
+                tempFilteredClients,
+                groupIndexByKey,
+                filterProject,
+                filteredTasks,
+                true
+            );
         }
     }
 
@@ -405,24 +466,18 @@ function moveHighlightDown() {
 const highlightedItemId = ref<string | null>(null);
 
 watch(highlightedItemId, () => {
-    const highlightedItem = dropdownViewport.value?.querySelector(
-        `[data-project-id="${highlightedItemId.value}"]`
+    if (highlightedItemId.value === null) {
+        return;
+    }
+    // The highlighted row may be virtualized out of the DOM, so scroll by index
+    // through the virtualizer instead of querying for the element.
+    const index = flatRows.value.findIndex(
+        (row) =>
+            (row.kind === 'project' && row.project.id === highlightedItemId.value) ||
+            (row.kind === 'task' && row.task.id === highlightedItemId.value)
     );
-    if (highlightedItem) {
-        highlightedItem.scrollIntoView({
-            block: 'nearest',
-            inline: 'nearest',
-        });
-    } else {
-        const highlightedTask = dropdownViewport.value?.querySelector(
-            `[data-task-id="${highlightedItemId.value}"]`
-        );
-        if (highlightedTask) {
-            highlightedTask.scrollIntoView({
-                block: 'nearest',
-                inline: 'nearest',
-            });
-        }
+    if (index !== -1) {
+        rowVirtualizer.value.scrollToIndex(index, { align: 'auto' });
     }
 });
 
@@ -470,6 +525,11 @@ const selectedProjectColor = computed(() => {
     return currentProject.value?.color || 'var(--theme-color-icon-default)';
 });
 
+const selectedClientName = computed(() => {
+    const clientId = currentProject.value?.client_id;
+    return clientId ? clientsById.value.get(clientId)?.name : undefined;
+});
+
 // This state prevents the selection to jump to random items when the mouse cursor is
 // over an item and some Item in the Dropdown is selected by keyboard navigation to scroll into view
 const mouseEnterHighlightActivated = ref(true);
@@ -489,16 +549,10 @@ function selectTask(taskId: string) {
 }
 
 function selectProject(projectId: string) {
-    project.value = projectId;
+    project.value = projectId === NO_PROJECT_ID ? props.noProjectValue : projectId;
     task.value = null;
     open.value = false;
     searchValue.value = '';
-    emit('changed', project.value, task.value);
-}
-
-function resetProject() {
-    project.value = null;
-    task.value = null;
     emit('changed', project.value, task.value);
 }
 
@@ -506,44 +560,35 @@ const showCreateProject = ref(false);
 </script>
 
 <template>
-    <template v-if="projects.length === 0 && canCreateProject">
-        <Button
-            :variant="props.variant"
-            :size="props.size"
-            :class="twMerge('w-full justify-start', props.class)"
-            @click="showCreateProject = true">
-            <PlusIcon class="w-4" />
-            <span class="truncate">Add new project</span>
-        </Button>
-    </template>
-    <Dropdown v-else v-model="open" :close-on-content-click="false" :align="props.align">
+    <Dropdown v-model="open" :close-on-content-click="false" :align="props.align">
         <template #trigger>
-            <div class="flex items-center gap-1">
+            <slot name="trigger">
                 <Button
                     :variant="props.variant"
                     :size="props.size"
                     :class="twMerge('w-full justify-start overflow-hidden', props.class)">
                     <div
-                        class="w-3 h-3 rounded-full shrink-0"
+                        class="w-2.5 h-2.5 rounded-full shrink-0"
                         :style="{ backgroundColor: selectedProjectColor }"></div>
-                    <span class="truncate shrink-[1] pr-1">{{ selectedProjectName }}</span>
+                    <span class="truncate shrink-[1] text-text-primary">{{
+                        selectedProjectName
+                    }}</span>
                     <template v-if="currentTask">
-                        <ChevronRightIcon class="w-4 h-4 text-text-tertiary shrink-0" />
+                        <ChevronRightIcon class="!size-3 text-text-primary shrink-0 -mx-1" />
                         <span class="truncate shrink-[100]">{{ currentTask.name }}</span>
                     </template>
+                    <template v-if="selectedClientName">
+                        <span class="dark:text-text-tertiary text-text-quaternary shrink-0">•</span>
+                        <span
+                            class="truncate shrink-[200] dark:text-text-tertiary text-text-quaternary"
+                            >{{ selectedClientName }}</span
+                        >
+                    </template>
                 </Button>
-                <button
-                    v-if="allowReset && project !== null"
-                    type="button"
-                    data-testid="project_reset_button"
-                    class="p-1 rounded hover:bg-quaternary text-text-tertiary hover:text-text-primary"
-                    @click.stop="resetProject">
-                    <XMarkIcon class="w-4 h-4" />
-                </button>
-            </div>
+            </slot>
         </template>
         <template #content>
-            <UseFocusTrap v-if="open" :options="{ immediate: true, allowOutsideClick: true }">
+            <div>
                 <input
                     ref="searchInput"
                     :value="searchValue"
@@ -559,62 +604,63 @@ const showCreateProject = ref(false);
                     @keydown.left.prevent="collapseProject" />
                 <div
                     ref="dropdownViewport"
-                    class="min-w-[350px] max-h-[350px] overflow-y-scroll relative"
+                    class="w-[400px] max-w-[calc(100vw-2rem)] max-h-[350px] overflow-y-scroll relative"
                     @mousemove="mouseEnterHighlightActivated = true">
-                    <template v-for="client in filteredResults" :key="client.id">
+                    <div :style="{ height: `${totalSize}px`, width: '100%', position: 'relative' }">
                         <div
-                            v-if="client.id !== 'no_project_no_client'"
-                            class="w-full pb-1 pt-2 px-2 text-text-tertiary text-xs font-semibold flex space-x-1 items-center">
-                            <span>
-                                {{ client.name }}
-                            </span>
-                        </div>
-                        <template
-                            v-for="projectWithTasks in client.projects"
-                            :key="projectWithTasks.id">
+                            v-for="{ virtualRow, row } in visibleRows"
+                            :key="row.key"
+                            class="absolute left-0 top-0 w-full"
+                            :style="{ transform: `translateY(${virtualRow.start}px)` }">
                             <div
+                                v-if="row.kind === 'client'"
+                                class="w-full pb-1 pt-2 px-2 text-text-tertiary text-xs font-semibold flex space-x-1 items-center">
+                                <span class="truncate">{{ row.name }}</span>
+                            </div>
+                            <div
+                                v-else-if="row.kind === 'project'"
                                 role="option"
                                 class="px-1 py-0.5 cursor-default"
-                                :value="projectWithTasks.id"
-                                :data-project-id="projectWithTasks.id"
-                                @click="selectProject(projectWithTasks.id)">
+                                :value="row.project.id"
+                                :data-project-id="row.project.id"
+                                @click="selectProject(row.project.id)">
                                 <div
                                     class="rounded-lg"
                                     :class="{
                                         'bg-card-background-active':
-                                            projectWithTasks.id === highlightedItemId,
+                                            row.project.id === highlightedItemId,
                                     }">
                                     <ProjectDropdownItem
                                         class="hover:!bg-transparent"
-                                        :selected="isProjectSelected(projectWithTasks)"
-                                        :name="projectWithTasks.name"
-                                        :color="projectWithTasks.color"
-                                        @mouseenter="setHighlightItemId(projectWithTasks.id)">
+                                        :selected="isProjectSelected(row.project)"
+                                        :name="row.project.name"
+                                        :color="row.project.color"
+                                        @mouseenter="setHighlightItemId(row.project.id)">
                                         <template #actions>
                                             <button
-                                                v-if="projectWithTasks.tasks.length > 0"
+                                                v-if="row.project.tasks.length > 0"
                                                 tabindex="-1"
-                                                class="px-2 py-0.5 mr-2 relative transition items-center rounded flex space-x-0.5 text-xs"
+                                                class="px-2 py-0.5 mr-2 relative transition items-center rounded flex space-x-0.5 text-xs shrink-0"
                                                 :class="{
                                                     'bg-white/5 text-text-secondary':
-                                                        projectWithTasks.expanded,
+                                                        row.project.expanded,
                                                     'hover:bg-white/5 hover:text-text-secondary text-text-tertiary':
-                                                        !projectWithTasks.expanded,
+                                                        !row.project.expanded,
                                                 }"
                                                 @click.prevent.stop="
                                                     () => {
-                                                        projectWithTasks.expanded =
-                                                            !projectWithTasks.expanded;
+                                                        row.project.expanded =
+                                                            !row.project.expanded;
                                                         searchInput?.focus();
                                                     }
                                                 ">
-                                                <span
-                                                    >{{ projectWithTasks.tasks.length }} Tasks</span
+                                                <span class="whitespace-nowrap"
+                                                    >{{ row.project.tasks.length }} Tasks</span
                                                 >
                                                 <ChevronDownIcon
                                                     :class="{
                                                         'transform rotate-180':
-                                                            projectWithTasks.expanded,
+                                                            row.project.expanded,
                                                     }"
                                                     class="w-4"></ChevronDownIcon>
                                             </button>
@@ -622,27 +668,27 @@ const showCreateProject = ref(false);
                                     </ProjectDropdownItem>
                                 </div>
                             </div>
-                            <div v-if="projectWithTasks.expanded" class="bg-quaternary">
-                                <div
-                                    v-for="task in projectWithTasks.tasks"
-                                    :key="task.id"
-                                    :data-task-id="task.id"
-                                    :class="{
-                                        'bg-card-background-active': task.id === highlightedItemId,
-                                    }"
-                                    class="flex items-center space-x-2 w-full px-5 py-1.5 text-start text-xs font-semibold leading-5 text-text-primary focus:outline-none focus:bg-card-background-active transition duration-150 ease-in-out"
-                                    @click="selectTask(task.id)"
-                                    @mouseenter="setHighlightItemId(task.id)">
-                                    <MinusIcon class="w-3 h-3 text-text-quaternary"></MinusIcon>
-                                    <span>{{ task.name }}</span>
-                                </div>
+                            <div
+                                v-else-if="row.kind === 'task'"
+                                :data-task-id="row.task.id"
+                                class="flex items-center space-x-2 w-full px-5 py-1.5 text-start text-xs font-semibold leading-5 text-text-primary focus:outline-none transition duration-150 ease-in-out"
+                                :class="
+                                    row.task.id === highlightedItemId
+                                        ? 'bg-quaternary dark:bg-tertiary'
+                                        : 'bg-tertiary dark:bg-quaternary'
+                                "
+                                @click="selectTask(row.task.id)"
+                                @mouseenter="setHighlightItemId(row.task.id)">
+                                <MinusIcon
+                                    class="w-3 h-3 text-text-quaternary shrink-0"></MinusIcon>
+                                <span class="min-w-0 truncate">{{ row.task.name }}</span>
                             </div>
-                        </template>
-                    </template>
+                        </div>
+                    </div>
                 </div>
                 <div v-if="canCreateProject" class="hover:bg-card-background-active rounded-b-lg">
                     <button
-                        class="text-text-primary flex space-x-3 items-center px-4 py-3 text-xs font-semibold border-t border-card-background-separator"
+                        class="text-text-primary w-full flex space-x-3 items-center px-4 py-3 text-xs font-semibold border-t border-card-background-separator"
                         @click="
                             open = false;
                             showCreateProject = true;
@@ -652,7 +698,7 @@ const showCreateProject = ref(false);
                         <span>Create new Project</span>
                     </button>
                 </div>
-            </UseFocusTrap>
+            </div>
         </template>
     </Dropdown>
     <ProjectCreateModal
@@ -660,9 +706,11 @@ const showCreateProject = ref(false);
         v-model:show="showCreateProject"
         :create-client
         :enable-estimated-time="enableEstimatedTime"
+        :organization-billable-rate="organizationBillableRate"
         :currency="currency"
         :clients="clients"
-        :create-project></ProjectCreateModal>
+        :create-project
+        :initial-project-name="searchValue"></ProjectCreateModal>
 </template>
 
 <style scoped></style>

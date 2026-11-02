@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\V1;
 
 use App\Enums\ExportFormat;
-use App\Enums\Role;
+use App\Enums\TimeEntryType;
 use App\Exceptions\Api\FeatureIsNotAvailableInFreePlanApiException;
 use App\Exceptions\Api\OverlappingTimeEntryApiException;
 use App\Exceptions\Api\PdfRendererIsNotConfiguredException;
 use App\Exceptions\Api\TimeEntryCanNotBeRestartedApiException;
+use App\Exceptions\Api\TimeEntryMemberCanNotBeChangedWhileRunningApiException;
 use App\Exceptions\Api\TimeEntryStillRunningApiException;
 use App\Http\Requests\V1\TimeEntry\TimeEntryAggregateExportRequest;
 use App\Http\Requests\V1\TimeEntry\TimeEntryAggregateRequest;
@@ -28,6 +29,7 @@ use App\Models\Organization;
 use App\Models\Project;
 use App\Models\Task;
 use App\Models\TimeEntry;
+use App\Service\BillableRateService;
 use App\Service\LocalizationService;
 use App\Service\ReportExport\TimeEntriesDetailedCsvExport;
 use App\Service\ReportExport\TimeEntriesDetailedExport;
@@ -50,15 +52,18 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use LogicException;
 use Maatwebsite\Excel\Facades\Excel;
 use Spatie\TemporaryDirectory\TemporaryDirectory;
 
 class TimeEntryController extends Controller
 {
-    private function assertNoOverlap(Organization $organization, Member $member, \Illuminate\Support\Carbon $start, ?\Illuminate\Support\Carbon $end, ?TimeEntry $exclude = null): void
+    private function assertNoOverlap(Organization $organization, Member $member, Carbon $start, ?Carbon $end, ?TimeEntry $exclude = null): void
     {
         if (! $organization->prevent_overlapping_time_entries) {
             return;
@@ -66,7 +71,7 @@ class TimeEntryController extends Controller
 
         $query = TimeEntry::query()
             ->where('organization_id', $organization->getKey())
-            ->where('user_id', $member->user_id)
+            ->where('member_id', $member->getKey())
             ->when($exclude !== null, function (Builder $q) use ($exclude): void {
                 $q->where('id', '!=', $exclude->getKey());
             })
@@ -106,10 +111,13 @@ class TimeEntryController extends Controller
     /**
      * Get time entries in organization
      *
-     * If you only need time entries for a specific user, you can filter by `user_id`.
-     * Users with the permission `time-entries:view:own` can only use this endpoint with their own user ID in the user_id filter.
+     * Without a member filter this returns the time entries of all members of the organization (for users who may view all time entries, such as owners and admins), not only your own.
+     * To get only your own time entries, pass your member ID as `member_id`. Your member ID is the `id` returned for this organization by `GET /v1/users/me/memberships`; it is not your user ID.
+     * Users with the permission `time-entries:view:own` can only use this endpoint with their own member ID in the member_id filter.
      *
-     * @return TimeEntryCollection<TimeEntryResource>
+     * The `start` and `end` filters both apply to the start time of an entry, in UTC. Convert the user's local day boundaries to UTC first.
+     * Results are paginated with `limit` (default 100, max 500) and `offset`; check `meta.total` and fetch further pages when needed.
+     * To find the running timer, use `active=true` (or `GET /v1/users/me/time-entries/active`).
      *
      * @throws AuthorizationException
      *
@@ -117,16 +125,17 @@ class TimeEntryController extends Controller
      */
     public function index(Organization $organization, TimeEntryIndexRequest $request): JsonResource
     {
-        /** @var Member|null $member */
-        $member = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
-        if ($member !== null && $member->user_id === Auth::id()) {
+        $member = $this->member($organization);
+        /** @var Member|null $memberFilter */
+        $memberFilter = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
+        if ($memberFilter !== null && $memberFilter->getKey() === $member->getKey()) {
             $this->checkPermission($organization, 'time-entries:view:own');
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
         }
 
         $canAccessPremiumFeatures = $this->canAccessPremiumFeatures($organization);
-        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $member, $canAccessPremiumFeatures);
+        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $memberFilter, $canAccessPremiumFeatures);
 
         $totalCount = $timeEntriesQuery->count();
 
@@ -157,7 +166,7 @@ class TimeEntryController extends Controller
             if ($timeEntries->count() === 0) {
                 Log::warning('User has has more than '.$limit.' time entries on one date', [
                     'date' => $lastDate->toDateString(),
-                    'user_id' => $request->input('user_id'),
+                    'member_id' => $request->input('member_id'),
                     'auth_user_id' => Auth::id(),
                     'limit' => $limit,
                 ]);
@@ -187,13 +196,15 @@ class TimeEntryController extends Controller
         $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
         if ($roundingType !== null && $roundingMinutes !== null) {
             $select = array_diff($select, ['start', 'end']);
-            $select[] = DB::raw(app(TimeEntryService::class)->getStartSelectRawForRounding($roundingType, $roundingMinutes).' as start');
-            $select[] = DB::raw(app(TimeEntryService::class)->getEndSelectRawForRounding($roundingType, $roundingMinutes).' as end');
+            // These SQL fragments are generated from a rounding enum and validated minute count.
+            $select[] = DB::raw(app(TimeEntryService::class)->getStartSelectRawForRounding($roundingType, $roundingMinutes).' as start'); // @phpstan-ignore argument.type
+            $select[] = DB::raw(app(TimeEntryService::class)->getEndSelectRawForRounding($roundingType, $roundingMinutes).' as end'); // @phpstan-ignore argument.type
         }
         $timeEntriesQuery = TimeEntry::query()
             ->whereBelongsTo($organization, 'organization')
             ->select($select)
-            ->orderBy('start', 'desc');
+            ->orderBy('time_entries.start', 'desc')
+            ->orderBy('time_entries.id');
 
         $filter = new TimeEntryFilter($timeEntriesQuery);
         $filter->addStartFilter($request->input('start'));
@@ -202,10 +213,11 @@ class TimeEntryController extends Controller
         $filter->addMemberIdFilter($member);
         $filter->addMemberIdsFilter($request->input('member_ids'));
         $filter->addProjectIdsFilter($request->input('project_ids'));
-        $filter->addTagIdsFilter($request->input('tag_ids'));
+        $filter->addTagIdsFilter($request->input('tag_ids'), $request->getTagMatchType());
         $filter->addTaskIdsFilter($request->input('task_ids'));
         $filter->addClientIdsFilter($request->input('client_ids'));
         $filter->addBillableFilter($request->input('billable'));
+        $filter->addTypeFilter($request->input('type'));
 
         return $filter->get();
     }
@@ -217,11 +229,12 @@ class TimeEntryController extends Controller
      *
      * @operationId exportTimeEntries
      */
-    public function indexExport(Organization $organization, TimeEntryIndexExportRequest $request, TimeEntryAggregationService $timeEntryAggregationService): JsonResponse
+    public function indexExport(Organization $organization, TimeEntryIndexExportRequest $request, TimeEntryAggregationService $timeEntryAggregationService, BillableRateService $billableRateService): JsonResponse
     {
-        /** @var Member|null $member */
-        $member = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
-        if ($member !== null && $member->user_id === Auth::id()) {
+        $member = $this->member($organization);
+        /** @var Member|null $memberFilter */
+        $memberFilter = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
+        if ($memberFilter !== null && $memberFilter->getKey() === $member->getKey()) {
             $this->checkPermission($organization, 'time-entries:view:own');
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
@@ -234,11 +247,11 @@ class TimeEntryController extends Controller
         }
         $user = $this->user();
         $timezone = $user->timezone;
-        $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
+        $showBillableRate = $billableRateService->canSeeBillableRates($organization, $this->member($organization));
         $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
         $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
 
-        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $member, $canAccessPremiumFeatures);
+        $timeEntriesQuery = $this->getTimeEntriesQuery($organization, $request, $memberFilter, $canAccessPremiumFeatures);
         $timeEntriesQuery->with([
             'task',
             'client',
@@ -246,7 +259,7 @@ class TimeEntryController extends Controller
             'user',
             'tagsRelation',
         ]);
-        $filename = 'time-entries-export-'.now()->format('Y-m-d_H-i-s').'.'.$format->getFileExtension();
+        $filename = 'time-entries-export-'.now()->format('Y-m-d_H-i-s').'-'.Str::uuid().'.'.$format->getFileExtension();
         $folderPath = 'exports';
         $path = $folderPath.'/'.$filename;
         $localizationService = LocalizationService::forOrganization($organization);
@@ -259,9 +272,9 @@ class TimeEntryController extends Controller
             }
             $viewFile = file_get_contents(resource_path('views/reports/time-entry-index/pdf.blade.php'));
             if ($viewFile === false) {
-                throw new \LogicException('View file not found');
+                throw new LogicException('View file not found');
             }
-            $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $member);
+            $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $memberFilter);
             $aggregatedData = $timeEntryAggregationService->getAggregatedTimeEntries(
                 $timeEntriesAggregateQuery,
                 null,
@@ -287,7 +300,7 @@ class TimeEntryController extends Controller
             ]);
             $footerViewFile = file_get_contents(resource_path('views/reports/time-entry-index/pdf-footer.blade.php'));
             if ($footerViewFile === false) {
-                throw new \LogicException('View file not found');
+                throw new LogicException('View file not found');
             }
             $footerHtml = Blade::render($footerViewFile);
             if ($debug) {
@@ -330,7 +343,9 @@ class TimeEntryController extends Controller
 
         return response()->json([
             'download_url' => Storage::disk(config('filesystems.private'))
-                ->temporaryUrl($path, now()->addMinutes(5)),
+                ->temporaryUrl($path, now()->addMinutes(5), [
+                    'ResponseContentDisposition' => 'attachment; filename="'.$filename.'"',
+                ]),
         ]);
     }
 
@@ -340,6 +355,11 @@ class TimeEntryController extends Controller
      * This endpoint allows you to filter time entries and aggregate them by different criteria.
      * The parameters `group` and `sub_group` allow you to group the time entries by different criteria.
      * If the group parameters are all set to `null` or are all missing, the endpoint will aggregate all filtered time entries.
+     *
+     * Durations are returned in `seconds` (divide by 3600 for hours) and amounts in `cost` as cents in the organization's currency (divide by 100 for money).
+     * Filter by member with `member_id`. Your member ID is the `id` returned for this organization by `GET /v1/users/me/memberships`; it is not your user ID.
+     * Array filters use the query format `client_ids[]=<id>`.
+     * Example: billable hours per client for a period: `group=client&billable=true&start=...&end=...`.
      *
      * @operationId getAggregatedTimeEntries
      *
@@ -366,22 +386,23 @@ class TimeEntryController extends Controller
      *
      * @throws AuthorizationException
      */
-    public function aggregate(Organization $organization, TimeEntryAggregateRequest $request, TimeEntryAggregationService $timeEntryAggregationService): array
+    public function aggregate(Organization $organization, TimeEntryAggregateRequest $request, TimeEntryAggregationService $timeEntryAggregationService, BillableRateService $billableRateService): array
     {
-        /** @var Member|null $member */
-        $member = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
-        if ($member !== null && $member->user_id === Auth::id()) {
+        $member = $this->member($organization);
+        /** @var Member|null $memberFilter */
+        $memberFilter = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
+        if ($memberFilter !== null && $memberFilter->getKey() === $member->getKey()) {
             $this->checkPermission($organization, 'time-entries:view:own');
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
         }
         $canAccessPremiumFeatures = $this->canAccessPremiumFeatures($organization);
         $user = $this->user();
-        $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
+        $showBillableRate = $billableRateService->canSeeBillableRates($organization, $this->member($organization));
 
         $group1Type = $request->getGroup();
         $group2Type = $request->getSubGroup();
-        $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $member);
+        $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $memberFilter);
         $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
         $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
 
@@ -415,11 +436,12 @@ class TimeEntryController extends Controller
      * @throws NoOutputFileInResponse
      * @throws FeatureIsNotAvailableInFreePlanApiException
      */
-    public function aggregateExport(Organization $organization, TimeEntryAggregateExportRequest $request, TimeEntryAggregationService $timeEntryAggregationService): JsonResponse
+    public function aggregateExport(Organization $organization, TimeEntryAggregateExportRequest $request, TimeEntryAggregationService $timeEntryAggregationService, BillableRateService $billableRateService): JsonResponse
     {
-        /** @var Member|null $member */
-        $member = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
-        if ($member !== null && $member->user_id === Auth::id()) {
+        $member = $this->member($organization);
+        /** @var Member|null $memberFilter */
+        $memberFilter = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
+        if ($memberFilter !== null && $memberFilter->getKey() === $member->getKey()) {
             $this->checkPermission($organization, 'time-entries:view:own');
         } else {
             $this->checkPermission($organization, 'time-entries:view:all');
@@ -431,11 +453,11 @@ class TimeEntryController extends Controller
         }
         $debug = $request->getDebug();
         $user = $this->user();
-        $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
+        $showBillableRate = $billableRateService->canSeeBillableRates($organization, $this->member($organization));
 
         $group = $request->getGroup();
         $subGroup = $request->getSubGroup();
-        $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $member);
+        $timeEntriesAggregateQuery = $this->getTimeEntriesAggregateQuery($organization, $request, $memberFilter);
         $roundingType = $canAccessPremiumFeatures ? $request->getRoundingType() : null;
         $roundingMinutes = $canAccessPremiumFeatures ? $request->getRoundingMinutes() : null;
 
@@ -469,7 +491,7 @@ class TimeEntryController extends Controller
         $timezone = app(TimezoneService::class)->getTimezoneFromUser($this->user());
         $localizationService = LocalizationService::forOrganization($organization);
 
-        $filename = 'time-entries-report-'.now()->format('Y-m-d_H-i-s').'.'.$format->getFileExtension();
+        $filename = 'time-entries-report-'.now()->format('Y-m-d_H-i-s').'-'.Str::uuid().'.'.$format->getFileExtension();
         $folderPath = 'exports';
         $path = $folderPath.'/'.$filename;
 
@@ -485,7 +507,7 @@ class TimeEntryController extends Controller
             ]);
             $viewFile = file_get_contents(resource_path('views/reports/time-entry-aggregate/pdf.blade.php'));
             if ($viewFile === false) {
-                throw new \LogicException('View file not found');
+                throw new LogicException('View file not found');
             }
             $html = Blade::render($viewFile, [
                 'aggregatedData' => $aggregatedData,
@@ -502,7 +524,7 @@ class TimeEntryController extends Controller
             ]);
             $footerViewFile = file_get_contents(resource_path('views/reports/time-entry-aggregate/pdf-footer.blade.php'));
             if ($footerViewFile === false) {
-                throw new \LogicException('View file not found');
+                throw new LogicException('View file not found');
             }
             $footerHtml = Blade::render($footerViewFile);
             if ($debug) {
@@ -527,7 +549,7 @@ class TimeEntryController extends Controller
                 ->putFileAs($folderPath, new File($tempFolder->path($filenameTemp)), $filename);
         } else {
             Excel::store(
-                new TimeEntriesReportExport($aggregatedData, $format, $currency, $group, $subGroup, $showBillableRate),
+                new TimeEntriesReportExport($aggregatedData, $format, $currency, $group, $subGroup, $showBillableRate, $localizationService),
                 $path,
                 config('filesystems.private'),
                 $format->getExportPackageType(),
@@ -539,7 +561,9 @@ class TimeEntryController extends Controller
 
         return response()->json([
             'download_url' => Storage::disk(config('filesystems.private'))
-                ->temporaryUrl($path, now()->addMinutes(5)),
+                ->temporaryUrl($path, now()->addMinutes(5), [
+                    'ResponseContentDisposition' => 'attachment; filename="'.$filename.'"',
+                ]),
         ]);
     }
 
@@ -558,16 +582,23 @@ class TimeEntryController extends Controller
         $filter->addMemberIdFilter($member);
         $filter->addMemberIdsFilter($request->input('member_ids'));
         $filter->addProjectIdsFilter($request->input('project_ids'));
-        $filter->addTagIdsFilter($request->input('tag_ids'));
+        $filter->addTagIdsFilter($request->input('tag_ids'), $request->getTagMatchType());
         $filter->addTaskIdsFilter($request->input('task_ids'));
         $filter->addClientIdsFilter($request->input('client_ids'));
         $filter->addBillableFilter($request->input('billable'));
+        $filter->addTypeFilter($request->input('type'));
 
         return $filter->get();
     }
 
     /**
      * Create time entry
+     *
+     * `billable` is not taken from the project. To match the web app, set it to the project's `is_billable` value (or `false` without a project).
+     *
+     * A member can only have one running time entry (an entry with `end` set to `null`). Creating a running entry while another one runs fails with `time_entry_still_running`.
+     * To start a new timer, first stop the running entry by updating its `end` to the current time, then create the new entry.
+     * To log past work, send both `start` and `end` (UTC). Create one entry per block of work.
      *
      * @throws AuthorizationException
      * @throws TimeEntryStillRunningApiException
@@ -578,13 +609,30 @@ class TimeEntryController extends Controller
     {
         /** @var Member $member */
         $member = Member::query()->findOrFail($request->input('member_id'));
-        if ($member->user_id === Auth::id()) {
+        if ($member->getKey() === $this->member($organization)->getKey()) {
             $this->checkPermission($organization, 'time-entries:create:own');
         } else {
             $this->checkPermission($organization, 'time-entries:create:all');
         }
 
-        if ($request->input('end') === null && TimeEntry::query()->whereBelongsTo($member, 'member')->where('end', null)->exists()) {
+        // Lock the creation of running time entries per user, so that concurrent requests can not create more than one running time entry
+        $lock = $request->input('end') === null ? Cache::lock('time-entries:running:'.$member->user_id, 10) : null;
+        $lock?->block(5);
+
+        try {
+            return $this->storeTimeEntry($organization, $member, $request);
+        } finally {
+            $lock?->release();
+        }
+    }
+
+    /**
+     * @throws TimeEntryStillRunningApiException
+     */
+    private function storeTimeEntry(Organization $organization, Member $member, TimeEntryStoreRequest $request): JsonResource
+    {
+        // A user can only have one running time entry, across all organizations
+        if ($request->input('end') === null && TimeEntry::query()->where('user_id', $member->user_id)->whereNull('end')->exists()) {
             throw new TimeEntryStillRunningApiException;
         }
 
@@ -599,6 +647,10 @@ class TimeEntryController extends Controller
 
         $timeEntry = new TimeEntry;
         $timeEntry->fill($request->validated());
+        // Organizations that can not use billable rates can not create billable time entries
+        if ($timeEntry->billable && ! $this->canUseBillableRates($organization)) {
+            $timeEntry->billable = false;
+        }
         $timeEntry->client()->associate($client);
         $timeEntry->user_id = $member->user_id;
         $timeEntry->description = $request->input('description') ?? '';
@@ -619,18 +671,21 @@ class TimeEntryController extends Controller
     /**
      * Update time entry
      *
-     * @throws AuthorizationException|TimeEntryCanNotBeRestartedApiException
+     * To stop a running timer, set `end` to the stop time (UTC). Times the user gives in their own timezone must be converted to UTC first.
+     *
+     * @throws AuthorizationException|TimeEntryCanNotBeRestartedApiException|TimeEntryMemberCanNotBeChangedWhileRunningApiException
      *
      * @operationId updateTimeEntry
      */
     public function update(Organization $organization, TimeEntry $timeEntry, TimeEntryUpdateRequest $request): JsonResource
     {
-        /** @var Member|null $member */
-        $member = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
-        if ($timeEntry->member->user_id === Auth::id() && ($member === null || $member->user_id === Auth::id())) {
-            $this->checkPermission($organization, 'time-entries:update:own');
+        $member = $this->member($organization);
+        /** @var Member|null $newMember */
+        $newMember = $request->has('member_id') ? Member::query()->findOrFail($request->input('member_id')) : null;
+        if ($timeEntry->member_id === $member->getKey() && ($newMember === null || $newMember->getKey() === $member->getKey())) {
+            $this->checkPermission($organization, 'time-entries:update:own', $timeEntry);
         } else {
-            $this->checkPermission($organization, 'time-entries:update:all');
+            $this->checkPermission($organization, 'time-entries:update:all', $timeEntry);
         }
 
         if ($timeEntry->end !== null && $request->has('end') && $request->input('end') === null) {
@@ -643,6 +698,11 @@ class TimeEntryController extends Controller
         $effectiveStart = $request->has('start') ? Carbon::parse($request->input('start')) : $timeEntry->start;
         $effectiveEnd = $request->has('end') ? ($request->input('end') !== null ? Carbon::parse($request->input('end')) : null) : $timeEntry->end;
         $this->assertNoOverlap($organization, $effectiveMember, $effectiveStart, $effectiveEnd, $timeEntry);
+
+        // The new member could already have a running time entry
+        if ($effectiveEnd === null && $newMember !== null && $newMember->getKey() !== $timeEntry->member_id) {
+            throw new TimeEntryMemberCanNotBeChangedWhileRunningApiException;
+        }
 
         $oldProject = $timeEntry->project;
         $oldTask = $timeEntry->task;
@@ -658,7 +718,20 @@ class TimeEntryController extends Controller
             $task = $request->input('task_id') !== null ? Task::findOrFail((string) $request->input('task_id')) : null;
         }
 
+        $wasBillable = $timeEntry->billable;
         $timeEntry->fill($request->validated());
+        // Organizations that can not use billable rates can keep or remove the billable flag, but not set it
+        if ($timeEntry->billable && ! $wasBillable && ! $this->canUseBillableRates($organization)) {
+            $timeEntry->billable = false;
+        }
+        if ($newMember !== null) {
+            $timeEntry->member()->associate($newMember);
+            $timeEntry->user()->associate($newMember->user);
+        }
+        // If project is changed, but task is not, we remove the old task from the time entry
+        if ($request->has('project_id') && ! $request->has('task_id') && $oldTask !== null && $oldTask->project_id !== $project?->getKey()) {
+            $timeEntry->task()->disassociate();
+        }
         $timeEntry->description = $request->input('description', $timeEntry->description) ?? '';
         $timeEntry->setComputedAttributeValue('billable_rate');
         $timeEntry->save();
@@ -682,12 +755,17 @@ class TimeEntryController extends Controller
     /**
      * Update multiple time entries
      *
+     * Applies the same `changes` to every entry in `ids`. To find the IDs, list entries with `GET /organizations/{organization}/time-entries`
+     * (filtered by `member_id`, the project and the other criteria), then send their IDs here.
+     * When `changes.project_id` moves entries to another project, also set `changes.task_id` to a task of the new project or to `null`, because tasks belong to a project.
+     *
      * @operationId updateMultipleTimeEntries
      *
      * @throws AuthorizationException
      */
     public function updateMultiple(Organization $organization, TimeEntryUpdateMultipleRequest $request): JsonResponse
     {
+        $member = $this->member($organization);
         $this->checkAnyPermission($organization, ['time-entries:update:all', 'time-entries:update:own']);
         $canAccessAll = $this->hasPermission($organization, 'time-entries:update:all');
 
@@ -703,6 +781,7 @@ class TimeEntryController extends Controller
             ->get();
 
         $changes = $request->validated('changes');
+        $canUseBillableRates = $this->canUseBillableRates($organization);
 
         if ($request->has('changes.description')) {
             $changes['description'] = $request->input('changes.description') ?? '';
@@ -711,6 +790,9 @@ class TimeEntryController extends Controller
         if (isset($changes['member_id']) && ! $canAccessAll && $this->member($organization)->getKey() !== $changes['member_id']) {
             throw new AuthorizationException;
         }
+
+        /** @var Member|null $newMember */
+        $newMember = isset($changes['member_id']) ? Member::query()->findOrFail($changes['member_id']) : null;
 
         $project = null;
         $client = null;
@@ -738,18 +820,46 @@ class TimeEntryController extends Controller
 
                 continue;
             }
-            if (! $canAccessAll && $timeEntry->user_id !== Auth::id()) {
+            if (! $canAccessAll && $timeEntry->member_id !== $member->getKey()) {
                 $error->push($id);
 
                 continue;
 
             }
+            // Changing time entries to Break entries is only allowed when breaks are enabled in the org settings
+            $resultingType = isset($changes['type']) ? TimeEntryType::from($changes['type']) : $timeEntry->type;
+            if ($resultingType === TimeEntryType::Break && $timeEntry->type !== TimeEntryType::Break && ! $organization->breaks_enabled) {
+                $error->push($id);
+
+                continue;
+            }
+            // Break entries can not be billable, have tags or belong to a project/task (see TimeEntry::booted)
+            if ($resultingType === TimeEntryType::Break && ($project !== null || $task !== null || $request->boolean('changes.billable') || count($changes['tags'] ?? []) > 0)) {
+                $error->push($id);
+
+                continue;
+            }
+            // The new member could already have a running time entry
+            if ($newMember !== null && $timeEntry->end === null && $newMember->getKey() !== $timeEntry->member_id) {
+                $error->push($id);
+
+                continue;
+            }
             $oldProject = $timeEntry->project;
             $oldTask = $timeEntry->task;
+            $wasBillable = $timeEntry->billable;
 
             $timeEntry->fill($changes);
+            // Organizations that can not use billable rates can keep or remove the billable flag, but not set it
+            if (! $wasBillable && ! $canUseBillableRates) {
+                $timeEntry->billable = false;
+            }
+            if ($newMember !== null) {
+                $timeEntry->member()->associate($newMember);
+                $timeEntry->user_id = $newMember->user_id;
+            }
             // If project is changed, but task is not, we remove the old task from the time entry
-            if ($oldProject !== null && $project !== null && $oldProject->isNot($project) && $task === null) {
+            if ($request->has('changes.project_id') && ! $request->has('changes.task_id') && $oldTask !== null && $oldTask->project_id !== $project?->getKey()) {
                 $timeEntry->task()->disassociate();
             }
             if ($overwriteClient) {
@@ -788,7 +898,8 @@ class TimeEntryController extends Controller
      */
     public function destroy(Organization $organization, TimeEntry $timeEntry): JsonResponse
     {
-        if ($timeEntry->member->user_id === Auth::id()) {
+        $member = $this->member($organization);
+        if ($timeEntry->member_id === $member->getKey()) {
             $this->checkPermission($organization, 'time-entries:delete:own', $timeEntry);
         } else {
             $this->checkPermission($organization, 'time-entries:delete:all', $timeEntry);
@@ -845,7 +956,7 @@ class TimeEntryController extends Controller
                 continue;
             }
 
-            if (! $canDeleteAll && $timeEntry->user_id !== Auth::id()) {
+            if (! $canDeleteAll && $timeEntry->member_id !== $this->member($organization)->getKey()) {
                 $error->push($id);
 
                 continue;

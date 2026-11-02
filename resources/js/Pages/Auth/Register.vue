@@ -2,14 +2,19 @@
 import { Head, Link, useForm, usePage } from '@inertiajs/vue3';
 import AuthenticationCard from '@/Components/AuthenticationCard.vue';
 import AuthenticationCardLogo from '@/Components/AuthenticationCardLogo.vue';
+import Banner from '@/Components/Banner.vue';
 import Checkbox from '@/packages/ui/src/Input/Checkbox.vue';
 import { Field, FieldLabel, FieldError } from '@/packages/ui/src/field';
 import PrimaryButton from '@/packages/ui/src/Buttons/PrimaryButton.vue';
 import TextInput from '@/packages/ui/src/Input/TextInput.vue';
 
+const props = defineProps<{
+    email: string;
+}>();
+
 const form = useForm({
     name: '',
-    email: '',
+    email: props.email,
     password: '',
     password_confirmation: '',
     terms: false,
@@ -29,9 +34,6 @@ const page = usePage<{
     terms_url: string | null;
     privacy_policy_url: string | null;
     newsletter_consent: boolean;
-    jetstream: {
-        hasTermsAndPrivacyPolicyFeature: boolean;
-    };
     flash: {
         message: string;
     };
@@ -54,6 +56,8 @@ const page = usePage<{
                 <span class="text-text-primary">Login here!</span>
             </Link>
         </template>
+
+        <Banner card />
 
         <div
             v-if="page.props.flash?.message"
@@ -114,11 +118,7 @@ const page = usePage<{
             </Field>
 
             <div
-                v-if="
-                    page.props.jetstream.hasTermsAndPrivacyPolicyFeature &&
-                    page.props.terms_url !== null &&
-                    page.props.privacy_policy_url !== null
-                "
+                v-if="page.props.terms_url !== null && page.props.privacy_policy_url !== null"
                 class="mt-4">
                 <Field orientation="horizontal">
                     <Checkbox id="terms" v-model:checked="form.terms" name="terms" />

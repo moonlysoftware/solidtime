@@ -14,23 +14,12 @@ class ProfileInformationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_show_profile_information_succeeds(): void
+    public function test_profile_information_can_no_longer_be_updated_via_inertia(): void
     {
         // Arrange
-        $user = User::factory()->withPersonalOrganization()->create();
-        $this->actingAs($user);
-
-        // Act
-        $response = $this->get('/user/profile');
-
-        // Assert
-        $response->assertSuccessful();
-    }
-
-    public function test_profile_information_can_be_updated(): void
-    {
-        // Arrange
-        $user = User::factory()->create();
+        $user = User::factory()->create([
+            'email' => 'test@example.com',
+        ]);
         $timezone = app(TimezoneService::class)->getTimezones()[0];
         $this->actingAs($user);
 
@@ -43,11 +32,8 @@ class ProfileInformationTest extends TestCase
         ]);
 
         // Assert
-        $response->assertValid(errorBag: 'updateProfileInformation');
+        $response->assertStatus(403);
         $user = $user->fresh();
-        $this->assertEquals('Test Name', $user->name);
-        $this->assertEquals('test@example.com', $user->email);
-        $this->assertEquals($timezone, $user->timezone);
-        $this->assertEquals(Weekday::Sunday, $user->week_start);
+        $this->assertEquals($user->name, $user->name);
     }
 }

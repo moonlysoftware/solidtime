@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Actions\Fortify;
 
+use App\Enums\RegistrationMode;
 use App\Enums\Weekday;
 use App\Events\NewsletterRegistered;
 use App\Models\User;
+use App\Service\InvitationService;
 use App\Service\IpLookup\IpLookupServiceContract;
 use App\Service\TimezoneService;
 use App\Service\UserService;
@@ -16,7 +18,6 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use Korridor\LaravelModelValidationRules\Rules\UniqueEloquent;
 use Laravel\Fortify\Contracts\CreatesNewUsers;
-use Laravel\Jetstream\Jetstream;
 use Log;
 
 class CreateNewUser implements CreatesNewUsers
@@ -32,13 +33,14 @@ class CreateNewUser implements CreatesNewUsers
      */
     public function create(array $input): User
     {
-        if (! config('app.enable_registration')) {
+        $registrationMode = RegistrationMode::fromConfig(config('app.enable_registration'));
+        if ($registrationMode === RegistrationMode::Off) {
             throw ValidationException::withMessages([
                 'email' => [__('Registration is disabled.')],
             ]);
         }
 
-        Validator::make($input, [
+        $validated = Validator::make($input, [
             'name' => [
                 'required',
                 'string',
@@ -55,11 +57,25 @@ class CreateNewUser implements CreatesNewUsers
                 }),
             ],
             'password' => $this->passwordRules(),
-            'terms' => Jetstream::hasTermsAndPrivacyPolicyFeature() ? ['accepted', 'required'] : '',
+            'terms' => ['accepted', 'required'],
             'newsletter_consent' => [
                 'boolean',
             ],
         ])->validate();
+
+        if ($registrationMode === RegistrationMode::InviteOnly) {
+            $invitationService = app(InvitationService::class);
+            $email = (string) $validated['email'];
+            if (! $invitationService->hasAcceptedInvitationForEmail($email)) {
+                $message = $invitationService->hasPendingInvitationForEmail($email)
+                    ? __('Please accept the organization invitation sent to your email address before registering.')
+                    : __('Registration is only available to invited users.');
+
+                throw ValidationException::withMessages([
+                    'email' => [$message],
+                ]);
+            }
+        }
 
         $timezone = null;
         if (array_key_exists('timezone', $input) && is_string($input['timezone'])) {

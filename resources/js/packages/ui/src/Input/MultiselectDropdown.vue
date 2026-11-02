@@ -1,6 +1,6 @@
 <script setup lang="ts" generic="T">
 import Dropdown from '@/packages/ui/src/Input/Dropdown.vue';
-import { computed, type Ref, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import Checkbox from '@/packages/ui/src/Input/Checkbox.vue';
 import {
     ComboboxAnchor,
@@ -9,12 +9,18 @@ import {
     ComboboxItem,
     ComboboxRoot,
     ComboboxViewport,
-} from 'radix-vue';
+    ComboboxVirtualizer,
+} from 'reka-ui';
 
 const NONE_ID = 'none';
 
+// height of one row (px-2 py-1.5 text-sm → 12px padding + 20px line box).
+// Rows are uniform single-line, so a fixed size is exact enough for the virtualizer and avoids
+// any per-row DOM measurement.
+const ROW_HEIGHT = 32;
+
 const model = defineModel<string[]>({
-    default: [],
+    default: () => [],
 });
 
 const props = defineProps<{
@@ -27,17 +33,23 @@ const props = defineProps<{
 
 const open = ref(false);
 const searchValue = ref('');
-const sortedItems = ref<T[]>([]) as Ref<T[]>;
+// Pinned on open so rows don't re-sort while toggling; the item list itself stays reactive.
+const pinnedSelection = ref<Set<string>>(new Set());
 
 watch(open, (isOpen) => {
     if (isOpen) {
         searchValue.value = '';
-        sortedItems.value = [...props.items].sort((a, b) => {
-            const aSelected = model.value.includes(props.getKeyFromItem(a)) ? 0 : 1;
-            const bSelected = model.value.includes(props.getKeyFromItem(b)) ? 0 : 1;
-            return aSelected - bSelected;
-        });
+        pinnedSelection.value = new Set(model.value);
     }
+});
+
+const sortedItems = computed(() => {
+    return [...props.items].sort((a, b) => {
+        const aSelected = pinnedSelection.value.has(props.getKeyFromItem(a)) ? 0 : 1;
+        const bSelected = pinnedSelection.value.has(props.getKeyFromItem(b)) ? 0 : 1;
+        if (aSelected !== bSelected) return aSelected - bSelected;
+        return props.getNameForItem(a).localeCompare(props.getNameForItem(b));
+    });
 });
 
 const filteredItems = computed(() => {
@@ -54,6 +66,23 @@ const showNoItem = computed(() => {
     if (!search) return true;
     return props.noItemLabel.toLowerCase().includes(search);
 });
+
+// A single flat list for the virtualizer. The optional "no item" entry is folded in as the
+// first row so the whole list (including it) is virtualized through one ComboboxVirtualizer.
+type Row = { kind: 'none' } | { kind: 'item'; item: T };
+
+const rows = computed<Row[]>(() => {
+    const itemRows = filteredItems.value.map((item): Row => ({ kind: 'item', item }));
+    return showNoItem.value ? [{ kind: 'none' }, ...itemRows] : itemRows;
+});
+
+function keyForRow(row: Row): string {
+    return row.kind === 'none' ? NONE_ID : props.getKeyFromItem(row.item);
+}
+
+function nameForRow(row: Row): string {
+    return row.kind === 'none' ? (props.noItemLabel ?? '') : props.getNameForItem(row.item);
+}
 
 function toggleItem(id: string) {
     if (model.value.includes(id)) {
@@ -73,46 +102,44 @@ const emit = defineEmits(['update:modelValue', 'changed', 'submit']);
             <slot name="trigger"></slot>
         </template>
         <template #content>
+            <!-- kept open so the list stays visible during the popover close animation -->
             <ComboboxRoot
-                v-model:search-term="searchValue"
-                v-model:open="open"
+                :open="true"
                 class="p-2"
-                :filter-function="(val: string[]) => val">
+                :ignore-filter="true"
+                @update:open="
+                    (value: boolean) => {
+                        if (!value) open = false;
+                    }
+                ">
                 <ComboboxAnchor>
                     <ComboboxInput
+                        v-model="searchValue"
                         class="w-full h-8 rounded-md border border-input-border bg-input-background px-3 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none"
                         :placeholder="searchPlaceholder" />
                 </ComboboxAnchor>
                 <ComboboxContent
                     :dismiss-able="false"
                     position="inline"
-                    class="mt-2 min-w-60 max-w-80 max-h-60 overflow-y-auto">
-                    <ComboboxViewport>
-                        <ComboboxItem
-                            v-if="showNoItem"
-                            :value="NONE_ID"
-                            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-primary data-[highlighted]:bg-card-background-active cursor-default"
-                            @select.prevent="toggleItem(NONE_ID)">
-                            <Checkbox
-                                :checked="model.includes(NONE_ID)"
-                                aria-hidden="true"
-                                :tabindex="-1"
-                                class="pointer-events-none" />
-                            <span class="truncate">{{ noItemLabel }}</span>
-                        </ComboboxItem>
-                        <ComboboxItem
-                            v-for="item in filteredItems"
-                            :key="getKeyFromItem(item)"
-                            :value="getKeyFromItem(item)"
-                            class="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-primary data-[highlighted]:bg-card-background-active cursor-default"
-                            @select.prevent="toggleItem(getKeyFromItem(item))">
-                            <Checkbox
-                                :checked="model.includes(getKeyFromItem(item))"
-                                aria-hidden="true"
-                                :tabindex="-1"
-                                class="pointer-events-none" />
-                            <span class="truncate">{{ getNameForItem(item) }}</span>
-                        </ComboboxItem>
+                    class="mt-2 min-w-60 max-w-80">
+                    <ComboboxViewport class="max-h-60 overflow-y-auto">
+                        <ComboboxVirtualizer
+                            v-slot="{ option }"
+                            :options="rows"
+                            :estimate-size="ROW_HEIGHT"
+                            :text-content="nameForRow">
+                            <ComboboxItem
+                                :value="keyForRow(option)"
+                                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-text-primary data-[highlighted]:bg-card-background-active cursor-default"
+                                @select.prevent="toggleItem(keyForRow(option))">
+                                <Checkbox
+                                    :checked="model.includes(keyForRow(option))"
+                                    aria-hidden="true"
+                                    :tabindex="-1"
+                                    class="pointer-events-none" />
+                                <span class="truncate">{{ nameForRow(option) }}</span>
+                            </ComboboxItem>
+                        </ComboboxVirtualizer>
                     </ComboboxViewport>
                 </ComboboxContent>
             </ComboboxRoot>

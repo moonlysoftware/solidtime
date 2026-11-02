@@ -3,6 +3,8 @@ import duration from 'dayjs/plugin/duration';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import isToday from 'dayjs/plugin/isToday';
 import isYesterday from 'dayjs/plugin/isYesterday';
+import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
+import isSameOrAfter from 'dayjs/plugin/isSameOrAfter';
 import utc from 'dayjs/plugin/utc';
 import timezone from 'dayjs/plugin/timezone';
 import weekOfYear from 'dayjs/plugin/weekOfYear';
@@ -39,11 +41,37 @@ export type IntervalFormat =
     | 'hours-minutes'
     | 'hours-minutes-colon-separated'
     | 'hours-minutes-seconds-colon-separated';
-export type TimeInputUnit = 'minutes' | 'hours';
+function configureParseLocale(numberFormat?: string) {
+    switch (numberFormat) {
+        case 'point-comma':
+            parse.unit.group = '.';
+            parse.unit.decimal = ',';
+            break;
+        case 'space-comma':
+            parse.unit.group = ' ';
+            parse.unit.decimal = ',';
+            break;
+        case 'space-point':
+            parse.unit.group = ' ';
+            parse.unit.decimal = '.';
+            break;
+        case 'apostrophe-point':
+            parse.unit.group = "'";
+            parse.unit.decimal = '.';
+            break;
+        default:
+            // 'comma-point' or unset — default English
+            parse.unit.group = ',';
+            parse.unit.decimal = '.';
+            break;
+    }
+}
 
 dayjs.extend(relativeTime);
 dayjs.extend(isToday);
 dayjs.extend(isYesterday);
+dayjs.extend(isSameOrBefore);
+dayjs.extend(isSameOrAfter);
 dayjs.extend(duration);
 dayjs.extend(utc);
 dayjs.extend(timezone);
@@ -94,6 +122,26 @@ export function formatHumanReadableDuration(
     }
 }
 
+/**
+ * Format a duration for reporting views where cost and duration must reconcile.
+ *
+ * When the org's `hours-minutes` format is selected, seconds are normally dropped for
+ * readability (e.g. "14h 45min"). In reports this can make the total duration appear
+ * inconsistent with the billable cost (which is computed to the second). To keep the
+ * two columns reconcilable without inflating column widths with "14h 45min 06s",
+ * promote to the compact `HH:MM:SS` format in reporting contexts.
+ */
+export function formatReportingDuration(
+    duration: number,
+    intervalFormat?: string,
+    numberFormat?: string
+): string {
+    const promoted =
+        intervalFormat === 'hours-minutes' || intervalFormat === 'hours-minutes-colon-separated';
+    const effectiveFormat = promoted ? 'hours-minutes-seconds-colon-separated' : intervalFormat;
+    return formatHumanReadableDuration(duration, effectiveFormat, numberFormat);
+}
+
 export function formatDuration(duration: number): string {
     const dayJsDuration = dayjs.duration(duration, 's');
     const hours = Math.floor(dayJsDuration.asHours());
@@ -123,8 +171,34 @@ export function getLocalizedDayJs(timestamp?: string | null) {
     return dayjs.utc(timestamp).tz(getUserTimezone());
 }
 
+/**
+ * Create a dayjs instance for a specific wall-clock time on a given day.
+ * Sets hour/minute directly to avoid DST issues with .add(minutes) on
+ * transition days. Negative or overflow values are normalised by shifting
+ * whole days (`.add(n, 'day')` is DST-safe).
+ */
+export function getLocalizedDayJsFromMinutes(dayStr: string, minutesFromMidnight: number) {
+    const dayOffset = Math.floor(minutesFromMidnight / (24 * 60));
+    const remainder = minutesFromMidnight - dayOffset * 24 * 60;
+    return dayjs
+        .tz(`${dayStr}T00:00:00`, getUserTimezone())
+        .add(dayOffset, 'day')
+        .hour(Math.floor(remainder / 60))
+        .minute(Math.round(remainder % 60))
+        .second(0);
+}
+
 export function getLocalizedDateFromTimestamp(timestamp: string) {
     return getLocalizedDayJs(timestamp).format('YYYY-MM-DD');
+}
+
+/**
+ * Converts a local Date to a UTC-formatted ISO string.
+ * Treats the Date as being in the user's timezone and converts to UTC.
+ * This is the inverse of getLocalizedDayJs (which goes UTC → local).
+ */
+export function localDateToUtc(date: dayjs.Dayjs): string {
+    return date.tz(getUserTimezone(), true).utc().format();
 }
 
 /*
@@ -160,6 +234,24 @@ export function formatDateTimeLocalized(
 
 export function formatWeek(date: string | null): string {
     return 'Week ' + getDayJsInstance()(date).week();
+}
+
+/*
+ * Returns the range covered by the week starting on the given day.
+ * @param date - first day of a week, in the format of 'YYYY-MM-DD'
+ */
+export function formatWeekRange(date: string, format?: DateFormat): string {
+    const end = getDayJsInstance()(date).add(6, 'day').format('YYYY-MM-DD');
+    return `${formatDate(date, format)} - ${formatDate(end, format)}`;
+}
+
+/*
+ * Returns the month that the given key falls in. There is no `DateFormat` variant for a
+ * month, so this is not affected by the organization date format.
+ * @param date - a month, in the format of 'YYYY-MM'
+ */
+export function formatMonth(date: string): string {
+    return getDayJsInstance()(date).format('MMMM YYYY');
 }
 
 /*
@@ -210,8 +302,11 @@ export function formatStartEnd(
 
 export function parseTimeInput(
     input: string,
-    defaultUnit: TimeInputUnit = 'minutes'
+    numberFormat?: string,
+    defaultUnit: 'minutes' | 'hours' = 'minutes'
 ): number | null {
+    configureParseLocale(numberFormat);
+
     // Check if input is a decimal number (hours)
     const decimalRegex = /^-?\d+[.,]\d+$/;
     if (decimalRegex.test(input)) {
@@ -219,10 +314,10 @@ export function parseTimeInput(
         return Math.round(hours * 3600);
     }
 
-    // Check if input is just a number (minutes or hours based on defaultUnit)
+    // Check if input is just a number
     if (/^-?\d+$/.test(input)) {
         const value = parseInt(input);
-        return defaultUnit === 'minutes' ? value * 60 : value * 3600;
+        return defaultUnit === 'hours' ? value * 3600 : value * 60;
     }
 
     // Check if input is in HH:MM:SS format
@@ -248,7 +343,7 @@ export function parseTimeInput(
         }
     }
 
-    // Try to parse natural language like "1h 30m"
+    // Try to parse natural language like "1h 30m" or locale-formatted like "1,00 h"
     const parsedDuration = parse(input, 's');
     if (parsedDuration && parsedDuration > 0) {
         return parsedDuration;

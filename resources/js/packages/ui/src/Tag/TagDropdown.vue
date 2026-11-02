@@ -32,22 +32,27 @@ const props = withDefaults(
 );
 
 const model = defineModel<string[]>({
-    default: [],
+    default: () => [],
 });
 
 const open = ref(false);
 const searchValue = ref('');
-const sortedTags = ref<Tag[]>([]);
+// Pinned on open so rows don't re-sort while toggling; the tag list itself stays reactive.
+const pinnedSelection = ref<Set<string>>(new Set());
 
 watch(open, (isOpen) => {
     if (isOpen) {
         searchValue.value = '';
-        sortedTags.value = [...props.tags].sort((a, b) => {
-            const aSelected = model.value.includes(a.id) ? 0 : 1;
-            const bSelected = model.value.includes(b.id) ? 0 : 1;
-            return aSelected - bSelected;
-        });
+        pinnedSelection.value = new Set(model.value);
     }
+});
+
+const sortedTags = computed(() => {
+    return [...props.tags].sort((a, b) => {
+        const aSelected = pinnedSelection.value.has(a.id) ? 0 : 1;
+        const bSelected = pinnedSelection.value.has(b.id) ? 0 : 1;
+        return aSelected - bSelected;
+    });
 });
 
 const filteredTags = computed(() => {
@@ -114,6 +119,7 @@ const showCreateTagModal = ref(false);
                         class="w-full rounded-md border border-input-border bg-input-background px-3 py-1.5 text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none"
                         placeholder="Search for a Tag..." />
                 </ComboboxAnchor>
+                <slot name="content-before-list"></slot>
                 <ComboboxContent
                     :dismiss-able="false"
                     position="inline"

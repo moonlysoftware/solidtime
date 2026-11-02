@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Import\Importers;
 
 use App\Enums\Role;
+use App\Enums\TimeEntryType;
 use App\Jobs\RecalculateSpentTimeForProject;
 use App\Jobs\RecalculateSpentTimeForTask;
 use App\Models\TimeEntry;
@@ -15,7 +16,6 @@ use Illuminate\Support\Str;
 use League\Csv\Reader;
 use Override;
 use Spatie\TemporaryDirectory\TemporaryDirectory;
-use ZipArchive;
 
 class SolidtimeImporter extends DefaultImporter
 {
@@ -33,16 +33,10 @@ class SolidtimeImporter extends DefaultImporter
         $temporaryDirectoryZip = null;
         $temporaryDirectory = null;
         try {
-            $zip = new ZipArchive;
             $temporaryDirectoryZip = TemporaryDirectory::make();
             file_put_contents($temporaryDirectoryZip->path('import.zip'), $data);
-            $res = $zip->open($temporaryDirectoryZip->path('import.zip'), ZipArchive::RDONLY);
-            if ($res !== true) {
-                throw new ImportException('Invalid ZIP, error code: '.$res);
-            }
             $temporaryDirectory = TemporaryDirectory::make();
-            $zip->extractTo($temporaryDirectory->path());
-            $zip->close();
+            app(ZipImportHelper::class)->extract($temporaryDirectoryZip->path('import.zip'), $temporaryDirectory->path());
 
             if (! file_exists($temporaryDirectory->path('meta.json'))) {
                 throw new ImportException('File "meta.json" missing in ZIP');
@@ -205,6 +199,7 @@ class SolidtimeImporter extends DefaultImporter
                 if ($projectId === null) {
                     throw new Exception('Project does not exist');
                 }
+                $this->checkTaskNameLength($task['name']);
                 $this->taskImportHelper->getKey([
                     'name' => $task['name'],
                     'project_id' => $projectId,
@@ -216,18 +211,34 @@ class SolidtimeImporter extends DefaultImporter
 
             // Time entries
             foreach ($timeEntriesReader as $timeEntryRow) {
+                // Running time entries are skipped, since the user could already have a running time entry
+                if ($timeEntryRow['end'] === '') {
+                    continue;
+                }
                 $userId = $this->userImportHelper->getKeyByExternalIdentifier($timeEntryRow['user_id']);
+                if ($userId === null) {
+                    throw new ImportException('Time entry references a user that does not exist in the import');
+                }
                 $memberId = $this->memberImportHelper->getKeyByExternalIdentifier($timeEntryRow['member_id']);
+                if ($memberId === null) {
+                    throw new ImportException('Time entry references a member that does not exist in the import');
+                }
                 $member = $this->memberImportHelper->getModelById($memberId);
                 $clientId = null;
                 if ($timeEntryRow['client_id'] !== '') {
                     $clientId = $this->clientImportHelper->getKeyByExternalIdentifier($timeEntryRow['client_id']);
+                    if ($clientId === null) {
+                        throw new ImportException('Time entry references a client that does not exist in the import');
+                    }
                 }
                 $project = null;
                 $projectId = null;
                 $projectMember = null;
                 if ($timeEntryRow['project_id'] !== '') {
                     $projectId = $this->projectImportHelper->getKeyByExternalIdentifier($timeEntryRow['project_id']);
+                    if ($projectId === null) {
+                        throw new ImportException('Time entry references a project that does not exist in the import');
+                    }
                     $project = $this->projectImportHelper->getModelById($projectId);
                     $projectMember = $this->projectMemberImportHelper->getModel([
                         'project_id' => $projectId,
@@ -237,6 +248,9 @@ class SolidtimeImporter extends DefaultImporter
                 $taskId = null;
                 if ($timeEntryRow['task_id'] !== '') {
                     $taskId = $this->taskImportHelper->getKeyByExternalIdentifier($timeEntryRow['task_id']);
+                    if ($taskId === null) {
+                        throw new ImportException('Time entry references a task that does not exist in the import');
+                    }
                     $this->taskImportHelper->getModelById($taskId);
                 }
                 $timeEntry = new TimeEntry;
@@ -254,7 +268,15 @@ class SolidtimeImporter extends DefaultImporter
                 if (! in_array($timeEntryRow['billable'], ['true', 'false'], true)) {
                     throw new ImportException('Invalid billable value');
                 }
-                $timeEntry->billable = $timeEntryRow['billable'] === 'true';
+                $timeEntry->billable = $this->canUseBillableRates && $timeEntryRow['billable'] === 'true';
+                // The type column does not exist in old exports
+                if (($timeEntryRow['type'] ?? '') !== '') {
+                    $type = TimeEntryType::tryFrom($timeEntryRow['type']);
+                    if ($type === null) {
+                        throw new ImportException('Invalid type value');
+                    }
+                    $timeEntry->type = $type;
+                }
                 $timeEntry->tags = $this->getTags($timeEntryRow['tags']);
                 $timeEntry->is_imported = true;
 
@@ -268,19 +290,18 @@ class SolidtimeImporter extends DefaultImporter
                 }
                 $timeEntry->start = $start->utc();
 
-                if ($timeEntryRow['end'] !== '') {
-                    try {
-                        $end = Carbon::createFromFormat('Y-m-d\TH:i:s\Z', $timeEntryRow['end'], 'UTC');
-                    } catch (InvalidFormatException) {
-                        throw new ImportException('End date ("'.$timeEntryRow['end'].'") is invalid');
-                    }
-                    if ($end === null) {
-                        throw new ImportException('End date ("'.$timeEntryRow['end'].'") is invalid');
-                    }
-                    $timeEntry->end = $end->utc();
-                } else {
-                    $timeEntry->end = null;
+                try {
+                    $end = Carbon::createFromFormat('Y-m-d\TH:i:s\Z', $timeEntryRow['end'], 'UTC');
+                } catch (InvalidFormatException) {
+                    throw new ImportException('End date ("'.$timeEntryRow['end'].'") is invalid');
                 }
+                if ($end === null) {
+                    throw new ImportException('End date ("'.$timeEntryRow['end'].'") is invalid');
+                }
+                if ($end->lt($start)) {
+                    throw new ImportException('End date ("'.$timeEntryRow['end'].'") is before start date ("'.$timeEntryRow['start'].'")');
+                }
+                $timeEntry->end = $end->utc();
 
                 if ($timeEntryRow['still_active_email_sent_at'] !== '') {
                     try {

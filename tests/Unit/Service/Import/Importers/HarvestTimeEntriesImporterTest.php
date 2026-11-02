@@ -105,4 +105,55 @@ class HarvestTimeEntriesImporterTest extends ImporterTestAbstract
         $this->assertSame(2, $report->projectsCreated);
         $this->assertSame(1, $report->clientsCreated);
     }
+
+    public function test_import_fails_if_hours_are_negative(): void
+    {
+        // Arrange
+        $organization = Organization::factory()->create();
+        $timezone = 'Europe/Vienna';
+        $importer = new HarvestTimeEntriesImporter;
+        $importer->init($organization);
+        $data = "Date,Client,Project,Project Code,Task,Notes,Hours,Billable?,Invoiced?,Approved?,First Name,Last Name,Roles,Employee?,Billable Rate,Billable Amount,Cost Rate,Cost Amount,Currency,External Reference URL\n".
+            '2024-03-04,,Project without Client,,,"","-2,0",No,No,No,Peter,Tester,,Yes,"100,0","2.000,0","0,0","0,0",Euro - EUR,';
+
+        // Act
+        try {
+            $importer->importData($data, $timezone);
+        } catch (ImportException $e) {
+            // Assert
+            $this->assertSame('Hours ("-2,0") is negative', $e->getMessage());
+            $this->assertSame(0, TimeEntry::query()->count());
+
+            return;
+        }
+        $this->fail();
+    }
+
+    public function test_import_drops_billable_flags_and_rates_if_organization_can_not_use_billable_rates(): void
+    {
+        // Arrange
+        $this->actAsOrganizationWithoutBillableRates();
+        $organization = Organization::factory()->create();
+        $timezone = 'Europe/Vienna';
+        $importer = new HarvestTimeEntriesImporter;
+        $importer->init($organization);
+        $data = Storage::disk('testfiles')->get('harvest_time_entries_import_test_1.csv');
+
+        // Act
+        $importer->importData($data, $timezone);
+
+        // Assert
+        $timeEntries = TimeEntry::query()->whereBelongsTo($organization, 'organization')->get();
+        $this->assertCount(2, $timeEntries);
+        foreach ($timeEntries as $timeEntry) {
+            $this->assertFalse($timeEntry->billable);
+            $this->assertNull($timeEntry->billable_rate);
+        }
+        $projects = Project::query()->whereBelongsTo($organization, 'organization')->get();
+        $this->assertCount(2, $projects);
+        foreach ($projects as $project) {
+            $this->assertFalse($project->is_billable);
+            $this->assertNull($project->billable_rate);
+        }
+    }
 }

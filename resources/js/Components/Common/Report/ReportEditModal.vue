@@ -96,7 +96,7 @@ async function submit() {
 </script>
 
 <template>
-    <DialogModal closeable :show="show" @close="show = false">
+    <DialogModal closeable :show="show" @close="show = false" @submit="submit">
         <template #title>
             <div class="flex space-x-2">
                 <span> Create Report </span>
@@ -125,7 +125,7 @@ async function submit() {
                         </Field>
                         <Field v-if="report.is_public" orientation="horizontal">
                             <FieldLabel for="public_until">Expires at</FieldLabel>
-                            <DatePicker v-model="localPublicUntil"></DatePicker>
+                            <DatePicker v-model="localPublicUntil" clearable></DatePicker>
                         </Field>
                     </div>
                 </Field>

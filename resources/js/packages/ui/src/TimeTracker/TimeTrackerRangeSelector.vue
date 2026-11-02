@@ -11,6 +11,15 @@ const currentTimeEntry = defineModel<TimeEntry>('currentTimeEntry', {
 });
 const now = defineModel<null | Dayjs>('liveTimer');
 
+withDefaults(
+    defineProps<{
+        isOnBreak?: boolean;
+    }>(),
+    {
+        isOnBreak: false,
+    }
+);
+
 const emit = defineEmits<{
     startLiveTimer: [];
     stopLiveTimer: [];
@@ -56,7 +65,7 @@ const currentTime = computed({
 });
 
 function updateTimerAndStartLiveTimerUpdate() {
-    const seconds = parseTimeInput(temporaryCustomTimerEntry.value, 'minutes');
+    const seconds = parseTimeInput(temporaryCustomTimerEntry.value);
 
     if (seconds && seconds > 0) {
         const newStartDate = dayjs().subtract(seconds, 's');
@@ -154,8 +163,17 @@ function closeAndFocusInput() {
                     v-model="currentTime"
                     placeholder="00:00:00"
                     data-testid="time_entry_time"
-                    class="w-[110px] lg:w-[130px] h-full text-text-primary py-2.5 rounded-lg border-border-secondary border text-center px-4 text-base lg:text-lg font-semibold bg-card-background border-none placeholder-text-tertiary focus:ring-0 transition"
+                    class="w-[110px] lg:w-[120px] h-full py-2.5 rounded-lg text-center px-4 text-base font-semibold placeholder-text-tertiary focus:ring-0 transition"
+                    :class="
+                        isOnBreak
+                            ? 'text-amber-600 dark:text-amber-400 bg-transparent border-none'
+                            : 'text-text-primary bg-card-background border-border-secondary border border-none'
+                    "
                     type="text"
+                    autocomplete="off"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    data-form-type="other"
                     @focusin="openModalOnTab"
                     @click="openModalOnClick"
                     @keydown.exact.tab="focusNextElement"

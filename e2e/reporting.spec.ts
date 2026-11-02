@@ -10,12 +10,32 @@ import {
     createTimeEntryWithTagViaApi,
     createTimeEntryWithBillableStatusViaApi,
     createBareTimeEntryViaApi,
+    createTimeEntryOnDateViaApi,
     createPublicProjectViaApi,
     updateOrganizationSettingViaApi,
 } from './utils/api';
 
 // Each test registers a new user and creates test data via API
 test.describe.configure({ timeout: 30000 });
+
+test('date range picker labels and navigates reporting periods', async ({ page }) => {
+    await goToReporting(page);
+
+    const range = page.getByTestId('date_range_picker_display');
+    const previous = page.getByTestId('date_range_picker_previous');
+    const next = page.getByTestId('date_range_picker_next');
+
+    await expect(range).toContainText('Last 14 Days');
+    await expect(next).toBeDisabled();
+
+    await Promise.all([waitForReportingUpdate(page), previous.click()]);
+    await expect(range).not.toContainText('Last 14 Days');
+
+    // The initial reporting range is still fresh in Vue Query's cache, so returning to it
+    // does not necessarily trigger another aggregate request.
+    await next.click();
+    await expect(range).toContainText('Last 14 Days');
+});
 
 // ──────────────────────────────────────────────────
 // Project Multiselect Dropdown Tests
@@ -92,6 +112,37 @@ test('test that project multiselect search filters the option list', async ({ pa
     // Verify only matching project is visible
     await expect(page.getByRole('option').filter({ hasText: project1Name })).toBeVisible();
     await expect(page.getByRole('option').filter({ hasText: project2Name })).not.toBeVisible();
+
+    await page.keyboard.press('Escape');
+});
+
+test('test that the project filter virtualizes a long list (renders only a window)', async ({
+    page,
+    ctx,
+}) => {
+    // Create many projects so the dropdown must virtualize rather than render all of them.
+    const projectNames = Array.from(
+        { length: 80 },
+        (_, i) => `VirtProj ${String(i).padStart(2, '0')}`
+    );
+    await Promise.all(projectNames.map((name) => createProjectViaApi(ctx, { name })));
+
+    await goToReporting(page);
+    await expect(page.getByRole('button', { name: 'Export' })).toBeVisible();
+    await page.getByRole('button', { name: 'Projects' }).first().click();
+
+    // Only a small window of options is mounted, far fewer than the 80+ projects that exist.
+    await expect(page.getByRole('option').first()).toBeVisible();
+    const renderedCount = await page.getByRole('option').count();
+    expect(renderedCount).toBeGreaterThan(0);
+    expect(renderedCount).toBeLessThan(60);
+
+    // Virtualization must not drop options: searching narrows the list to the one deep match.
+    // Wait for the filtered count to settle to 1 before asserting — checking the option while
+    // the virtualizer is still re-rendering can transiently match a stale row (Firefox CI flake).
+    await page.getByPlaceholder('Search for a Project...').fill('VirtProj 79');
+    await expect(page.getByRole('option')).toHaveCount(1);
+    await expect(page.getByRole('option')).toContainText('VirtProj 79');
 
     await page.keyboard.press('Escape');
 });
@@ -333,7 +384,7 @@ test('test that task filtering works in reporting', async ({ page, ctx }) => {
     await page.keyboard.press('Escape');
 
     // Verify the report only shows 1h (task1's duration)
-    await expect(page.getByTestId('reporting_view').getByText('1h 00min').first()).toBeVisible();
+    await expect(page.getByTestId('reporting_view').getByText('1:00:00').first()).toBeVisible();
 });
 
 test('test that task multiselect search filters the option list', async ({ page, ctx }) => {
@@ -474,7 +525,7 @@ test('test that tag filtering works in reporting', async ({ page, ctx }) => {
     await page.keyboard.press('Escape');
 
     // Verify only time entries with tag1 are shown
-    await expect(page.getByTestId('reporting_view').getByText('1h 00min').first()).toBeVisible();
+    await expect(page.getByTestId('reporting_view').getByText('1:00:00').first()).toBeVisible();
 });
 
 test('test that tag dropdown search filters the option list', async ({ page, ctx }) => {
@@ -594,7 +645,7 @@ test('test that billable status filtering works in reporting', async ({ page, ct
         waitForReportingUpdate(page),
     ]);
 
-    await expect(page.getByTestId('reporting_view').getByText('1h 00min').first()).toBeVisible();
+    await expect(page.getByTestId('reporting_view').getByText('1:00:00').first()).toBeVisible();
 });
 
 test('test that billable filter can switch between all three states', async ({ page }) => {
@@ -810,6 +861,127 @@ test('test that setting group by to current sub group triggers sub group fallbac
     await expect(groupBySelects.filter({ hasText: 'Members' }).first()).toBeVisible();
 });
 
+test('test that group by date groups the report by day and formats the date labels with organization settings', async ({
+    page,
+    ctx,
+}) => {
+    await updateOrganizationSettingViaApi(ctx, { date_format: 'point-separated-d-m-yyyy' });
+
+    await createTimeEntryViaApi(ctx, {
+        description: 'Entry for group by date',
+        duration: '1h',
+    });
+
+    // Go to reporting page
+    await goToReporting(page);
+    await expect(page.getByRole('button', { name: 'Export' })).toBeVisible();
+
+    // Find the "Group by" selects within the reporting table
+    const groupBySelects = page.locator('[data-testid="reporting_view"]').getByRole('combobox');
+
+    // Default state: group=Project
+    await groupBySelects.filter({ hasText: 'Project' }).first().click();
+
+    const [aggregateResponse] = await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/time-entries/aggregate') &&
+                response.url().includes('group=day') &&
+                response.status() === 200
+        ),
+        page.getByRole('option', { name: 'Date', exact: true }).click(),
+    ]);
+
+    // Verify the API request contains the correct group parameter
+    const requestUrl = new URL(aggregateResponse.url());
+    expect(requestUrl.searchParams.get('group')).toBe('day');
+
+    // The row label is rendered in the organization date format (D.M.YYYY)
+    await expect(
+        page.getByTestId('reporting_view').getByText(/^\d{1,2}\.\d{1,2}\.\d{4}$/)
+    ).toBeVisible();
+    await expect(page.getByTestId('reporting_view').getByText(/^\d{4}-\d{2}-\d{2}$/)).toHaveCount(
+        0
+    );
+});
+
+test('test that group by week requests week grouping and does not leak the raw group key', async ({
+    page,
+    ctx,
+}) => {
+    await createTimeEntryViaApi(ctx, {
+        description: 'Entry for group by week',
+        duration: '1h',
+    });
+
+    await goToReporting(page);
+    await expect(page.getByRole('button', { name: 'Export' })).toBeVisible();
+
+    const groupBySelects = page.locator('[data-testid="reporting_view"]').getByRole('combobox');
+    await groupBySelects.filter({ hasText: 'Project' }).first().click();
+
+    const [aggregateResponse] = await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/time-entries/aggregate') &&
+                response.url().includes('group=week') &&
+                response.status() === 200
+        ),
+        page.getByRole('option', { name: 'Week', exact: true }).click(),
+    ]);
+
+    const requestUrl = new URL(aggregateResponse.url());
+    expect(requestUrl.searchParams.get('group')).toBe('week');
+
+    // The raw group key is the first day of the week and must not leak through.
+    await expect(page.getByTestId('reporting_view').getByText(/^\d{4}-\d{2}-\d{2}$/)).toHaveCount(
+        0
+    );
+});
+
+test('test that group by week labels a week spanning new year with a range crossing the year', async ({
+    page,
+    ctx,
+}) => {
+    await updateOrganizationSettingViaApi(ctx, { date_format: 'slash-separated-dd-mm-yyyy' });
+
+    for (const day of ['2025-12-22', '2025-12-29', '2026-01-05']) {
+        await createTimeEntryOnDateViaApi(ctx, {
+            date: new Date(`${day}T09:00:00Z`),
+            duration: '1h',
+            description: `Entry for ${day}`,
+        });
+    }
+
+    // The reporting page keeps its range in session storage, so seed a range spanning new year
+    // rather than driving the date picker.
+    await page.addInitScript(() => {
+        window.sessionStorage.setItem('reporting-start-date', '2025-12-15');
+        window.sessionStorage.setItem('reporting-end-date', '2026-01-15');
+    });
+
+    await goToReporting(page);
+    await expect(page.getByRole('button', { name: 'Export' })).toBeVisible();
+
+    const groupBySelects = page.locator('[data-testid="reporting_view"]').getByRole('combobox');
+    await groupBySelects.filter({ hasText: 'Project' }).first().click();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/time-entries/aggregate') &&
+                response.url().includes('group=week') &&
+                response.status() === 200
+        ),
+        page.getByRole('option', { name: 'Week', exact: true }).click(),
+    ]);
+
+    const reportingView = page.getByTestId('reporting_view');
+    await expect(reportingView.getByText('22/12/2025 - 28/12/2025', { exact: true })).toBeVisible();
+    await expect(reportingView.getByText('29/12/2025 - 04/01/2026', { exact: true })).toBeVisible();
+    await expect(reportingView.getByText('05/01/2026 - 11/01/2026', { exact: true })).toBeVisible();
+    await expect(reportingView.getByText(/^\d{4}-\d{2}-\d{2}$/)).toHaveCount(0);
+});
+
 // ──────────────────────────────────────────────────
 // Export Tests
 // ──────────────────────────────────────────────────
@@ -885,7 +1057,7 @@ test.describe('Employee Reporting Restrictions', () => {
 
         // Employee's data should be visible (1h)
         await expect(
-            employee.page.getByTestId('reporting_view').getByText('1h 00min').first()
+            employee.page.getByTestId('reporting_view').getByText('1:00:00').first()
         ).toBeVisible();
     });
 
@@ -987,4 +1159,25 @@ test.describe('Employee Reporting Restrictions', () => {
         // 1h at 100.00/h billable rate = 100.00 cost (shown in row and total)
         await expect(employee.page.getByText('100,00 EUR').first()).toBeVisible();
     });
+});
+
+test('test that reporting has a type filter that can show only breaks', async ({ page, ctx }) => {
+    await updateOrganizationSettingViaApi(ctx, { breaks_enabled: true });
+    await createTimeEntryViaApi(ctx, { duration: '1h', description: 'Regular work entry' });
+    await createTimeEntryViaApi(ctx, { duration: '20min', type: 'break' });
+
+    await goToReporting(page);
+    // The type filter defaults to "Work time"; switching it to "Breaks" re-aggregates.
+    const typeFilter = page.getByRole('combobox').filter({ hasText: 'Work time' });
+    await expect(typeFilter).toBeVisible();
+    await typeFilter.click();
+    await Promise.all([
+        page.waitForResponse(
+            (response) =>
+                response.url().includes('/time-entries/aggregate') &&
+                response.url().includes('type=break') &&
+                response.status() === 200
+        ),
+        page.getByRole('option', { name: 'Breaks' }).click(),
+    ]);
 });

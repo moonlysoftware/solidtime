@@ -20,7 +20,7 @@ import {
     getDayJsInstance,
 } from '@/packages/ui/src/utils/time';
 import chroma from 'chroma-js';
-import { useCssVariable } from '@/utils/useCssVariable';
+import { useCssVariable } from '@/packages/ui/src';
 import { useQuery } from '@tanstack/vue-query';
 import { getCurrentOrganizationId } from '@/utils/useUser';
 import { api, type Organization } from '@/packages/api/src';
@@ -63,7 +63,7 @@ const max = computed(() => {
 });
 
 const backgroundColor = useCssVariable('--theme-color-card-background');
-const borderColor = useCssVariable('--color-border');
+const borderColor = useCssVariable('--color-border-secondary');
 const labelColor = useCssVariable('--color-text-secondary');
 const chartColorRaw = useCssVariable('--theme-color-chart');
 

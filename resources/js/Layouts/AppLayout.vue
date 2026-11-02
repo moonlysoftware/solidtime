@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, usePage } from '@inertiajs/vue3';
+import { Head, router, usePage } from '@inertiajs/vue3';
 import Banner from '@/Components/Banner.vue';
 import OrganizationSwitcher from '@/Components/OrganizationSwitcher.vue';
 import CurrentSidebarTimer from '@/Components/CurrentSidebarTimer.vue';
@@ -17,12 +17,13 @@ import {
     UserGroupIcon,
     XMarkIcon,
     DocumentTextIcon,
+    TableCellsIcon,
 } from '@heroicons/vue/20/solid';
-import { PanelLeft } from 'lucide-vue-next';
+import { PanelLeft, Target } from '@lucide/vue';
 import NavigationSidebarItem from '@/Components/NavigationSidebarItem.vue';
 import UserSettingsIcon from '@/Components/UserSettingsIcon.vue';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
-import { nextTick, onMounted, provide, ref } from 'vue';
+import { computed, nextTick, onMounted, provide, ref } from 'vue';
 import NotificationContainer from '@/Components/NotificationContainer.vue';
 import { initializeStores } from '@/utils/init';
 import { useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
@@ -30,18 +31,23 @@ import {
     canManageBilling,
     canUpdateOrganization,
     canViewClients,
+    canViewGoals,
     canViewInvoices,
     canViewMembers,
     canViewProjects,
     canViewReport,
     canViewTags,
 } from '@/utils/permissions';
-import { isBillingActivated, isInvoicingActivated } from '@/utils/billing';
+import { canUseBillableRates, isBillingActivated, isInvoicingActivated } from '@/utils/billing';
+import UpgradeModal from '@/packages/ui/src/UpgradeModal.vue';
+import { billableRatesLockKey } from '@/packages/ui/src/utils/useBillableRatesLock';
+import { upgradeCtaKey } from '@/packages/ui/src/UpgradeModal/useUpgradeCta';
 import type { User } from '@/types/models';
 import { ArrowsRightLeftIcon } from '@heroicons/vue/16/solid';
 import { fetchToken, isTokenValid } from '@/utils/session';
 import UpdateSidebarNotification from '@/Components/UpdateSidebarNotification.vue';
 import BillingBanner from '@/Components/Billing/BillingBanner.vue';
+import SidebarPlanStatus from '@/Components/Billing/SidebarPlanStatus.vue';
 import UserTimezoneMismatchModal from '@/Components/Common/User/UserTimezoneMismatchModal.vue';
 import { useTheme } from '@/utils/theme';
 import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
@@ -86,6 +92,19 @@ const { organization, isLoading: isOrganizationLoading } = useOrganizationQuery(
 );
 
 provide('organization', organization);
+
+const showBillableRatesUpgradeModal = ref(false);
+provide(billableRatesLockKey, {
+    locked: computed(() => !canUseBillableRates()),
+    requestUpgrade: () => {
+        showBillableRatesUpgradeModal.value = true;
+    },
+});
+
+provide(upgradeCtaKey, {
+    canUpgrade: computed(() => isBillingActivated() && canManageBilling()),
+    goToBilling: () => router.visit('/billing'),
+});
 
 onMounted(async () => {
     useTheme();
@@ -135,7 +154,7 @@ const page = usePage<{
                     ? 'max-lg:translate-x-0 max-lg:shadow-xl'
                     : 'max-lg:-translate-x-full',
             ]"
-            class="flex-shrink-0 h-screen fixed w-[280px] px-2.5 py-4 hidden lg:flex flex-col justify-between bg-background border-r border-default-background-separator max-lg:z-50 max-lg:transition-transform max-lg:duration-200 max-lg:ease-in-out lg:w-[230px] 2xl:w-[250px] 2xl:px-3 lg:border-r-0"
+            class="flex-shrink-0 h-screen fixed w-[280px] px-2.5 py-4 hidden lg:flex flex-col justify-between bg-background border-r border-default-background-separator max-lg:z-50 max-lg:transition-transform max-lg:duration-200 max-lg:ease-in-out lg:w-[230px] lg:border-r-0"
             :style="showSidebarMenu ? { display: 'flex' } : undefined">
             <div class="flex flex-col h-full">
                 <div
@@ -186,6 +205,11 @@ const page = usePage<{
                                 :current="route().current('calendar')"
                                 :href="route('calendar')"></NavigationSidebarItem>
                             <NavigationSidebarItem
+                                title="Timesheet"
+                                :icon="TableCellsIcon"
+                                :current="route().current('timesheet')"
+                                :href="route('timesheet')"></NavigationSidebarItem>
+                            <NavigationSidebarItem
                                 title="Reporting"
                                 :icon="ChartBarIcon"
                                 :sub-items="[
@@ -212,6 +236,12 @@ const page = usePage<{
                                 "
                                 :href="route('reporting')">
                             </NavigationSidebarItem>
+                            <NavigationSidebarItem
+                                v-if="canViewGoals()"
+                                title="Goals"
+                                :icon="Target"
+                                :current="route().current('goals')"
+                                :href="route('goals')"></NavigationSidebarItem>
                         </ul>
                     </nav>
 
@@ -247,7 +277,9 @@ const page = usePage<{
                                 v-if="isInvoicingActivated() && canViewInvoices()"
                                 title="Invoices"
                                 :icon="DocumentTextIcon"
-                                :current="route().current('invoices')"
+                                :current="
+                                    route().current('invoices') || route().current('invoices.*')
+                                "
                                 href="/invoices"></NavigationSidebarItem>
                         </ul>
                     </nav>
@@ -274,10 +306,15 @@ const page = usePage<{
                                 v-if="canUpdateOrganization()"
                                 title="Settings"
                                 :icon="Cog6ToothIcon"
-                                :href="route('teams.show', page.props.auth.user.current_team.id)"
+                                :href="
+                                    route(
+                                        'organizations.show',
+                                        page.props.auth.user.current_team.id
+                                    )
+                                "
                                 :current="
                                     route().current(
-                                        'teams.show',
+                                        'organizations.show',
                                         page.props.auth.user.current_team.id
                                     )
                                 "></NavigationSidebarItem>
@@ -286,8 +323,9 @@ const page = usePage<{
                 </div>
                 <div class="justify-self-end">
                     <UpdateSidebarNotification></UpdateSidebarNotification>
+                    <SidebarPlanStatus v-if="isBillingActivated() && canManageBilling()" />
                     <ul
-                        class="border-t border-default-background-separator pt-3 gap-1 pr-2 flex justify-between items-center">
+                        class="border-t border-default-background-separator pt-3 gap-1 flex justify-between items-center">
                         <UserSettingsIcon></UserSettingsIcon>
 
                         <NavigationSidebarItem
@@ -308,7 +346,7 @@ const page = usePage<{
                 </div>
             </div>
         </div>
-        <div class="flex-1 lg:ml-[230px] 2xl:ml-[250px] min-w-0">
+        <div class="flex-1 lg:ml-[230px] min-w-0">
             <div
                 class="h-screen overflow-y-auto flex flex-col bg-default-background border-l border-default-background-separator">
                 <div
@@ -364,4 +402,5 @@ const page = usePage<{
     <NotificationContainer></NotificationContainer>
     <UserTimezoneMismatchModal></UserTimezoneMismatchModal>
     <CommandPaletteProvider></CommandPaletteProvider>
+    <UpgradeModal v-model:show="showBillableRatesUpgradeModal" feature="billable-rates" />
 </template>

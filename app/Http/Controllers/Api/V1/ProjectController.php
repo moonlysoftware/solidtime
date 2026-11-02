@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\Role;
 use App\Exceptions\Api\EntityStillInUseApiException;
 use App\Http\Requests\V1\Project\ProjectIndexRequest;
 use App\Http\Requests\V1\Project\ProjectStoreRequest;
@@ -35,13 +34,11 @@ class ProjectController extends Controller
     /**
      * Get projects visible to the current user
      *
-     * @return ProjectCollection<ProjectResource>
-     *
      * @throws AuthorizationException
      *
      * @operationId getProjects
      */
-    public function index(Organization $organization, ProjectIndexRequest $request): ProjectCollection
+    public function index(Organization $organization, ProjectIndexRequest $request, BillableRateService $billableRateService): ProjectCollection
     {
         $this->checkPermission($organization, 'projects:view');
         $canViewAllProjects = $this->hasPermission($organization, 'projects:view:all');
@@ -62,9 +59,10 @@ class ProjectController extends Controller
 
         $projects = $projectsQuery
             ->orderBy('created_at', 'desc')
+            ->orderBy('id')
             ->paginate(config('app.pagination_per_page_default'));
 
-        $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
+        $showBillableRate = $billableRateService->canSeeBillableRates($organization, $this->member($organization));
 
         return new ProjectCollection($projects, $showBillableRate);
     }
@@ -78,7 +76,7 @@ class ProjectController extends Controller
      */
     public function show(Organization $organization, Project $project): JsonResource
     {
-        $this->checkPermission($organization, 'projects:view', $project);
+        $this->checkPermission($organization, 'projects:view:all', $project);
 
         // Note: There is currently no need to check if a user is a member of the project,
         // since this is only relevant for users with the role "employee" and they can not access this endpoint.
@@ -98,11 +96,12 @@ class ProjectController extends Controller
     public function store(Organization $organization, ProjectStoreRequest $request): JsonResource
     {
         $this->checkPermission($organization, 'projects:create');
+        $canUseBillableRates = $this->canUseBillableRates($organization);
         $project = new Project;
         $project->name = $request->input('name');
         $project->color = $request->input('color');
-        $project->is_billable = (bool) $request->input('is_billable');
-        $project->billable_rate = $request->getBillableRate();
+        $project->is_billable = $canUseBillableRates && $request->boolean('is_billable');
+        $project->billable_rate = $canUseBillableRates ? $request->getBillableRate() : null;
         $project->client_id = $request->input('client_id');
         $project->is_public = $request->getIsPublic();
         if ($this->canAccessPremiumFeatures($organization) && $request->has('estimated_time')) {
@@ -124,9 +123,13 @@ class ProjectController extends Controller
     public function update(Organization $organization, Project $project, ProjectUpdateRequest $request, BillableRateService $billableRateService): JsonResource
     {
         $this->checkPermission($organization, 'projects:update', $project);
+        $canUseBillableRates = $this->canUseBillableRates($organization);
         $project->name = $request->input('name');
         $project->color = $request->input('color');
-        $project->is_billable = (bool) $request->input('is_billable');
+        // Organizations that can not use billable rates can keep or remove the billable flag, but not set it
+        if ($canUseBillableRates || ! $request->boolean('is_billable')) {
+            $project->is_billable = $request->boolean('is_billable');
+        }
         if ($request->has('is_archived')) {
             $project->archived_at = $request->getIsArchived() ? Carbon::now() : null;
         }
@@ -138,14 +141,16 @@ class ProjectController extends Controller
         }
         $oldBillableRate = $project->billable_rate;
         $clientIdChanged = false;
-        $project->billable_rate = $request->getBillableRate();
+        if ($request->has('billable_rate') && $canUseBillableRates) {
+            $project->billable_rate = $request->getBillableRate();
+        }
         if ($project->client_id !== $request->input('client_id')) {
             $project->client_id = $request->input('client_id');
             $clientIdChanged = true;
         }
         $project->save();
 
-        if ($oldBillableRate !== $request->getBillableRate()) {
+        if ($oldBillableRate !== $project->billable_rate) {
             $billableRateService->updateTimeEntriesBillableRateForProject($project);
         }
         if ($clientIdChanged) {

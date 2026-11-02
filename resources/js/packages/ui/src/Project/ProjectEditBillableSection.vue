@@ -1,13 +1,7 @@
 <script setup lang="ts">
 import { Field, FieldDescription, FieldLabel } from '../field';
 import BillableRateInput from '@/packages/ui/src/Input/BillableRateInput.vue';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/Components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '..';
 import {
     Tooltip,
     TooltipContent,
@@ -16,24 +10,27 @@ import {
 } from '@/packages/ui/src/tooltip';
 import { computed, onMounted, ref, watch } from 'vue';
 import BillableIcon from '@/packages/ui/src/Icons/BillableIcon.vue';
-import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
-import { getCurrentOrganizationId } from '@/utils/useUser';
+import { useBillableRatesLock } from '../utils/useBillableRatesLock';
 
-defineProps<{
+const props = defineProps<{
     currency: string;
+    organizationBillableRate: number | null;
 }>();
 
-const { organization } = useOrganizationQuery(getCurrentOrganizationId()!);
+const { locked: billableRatesLocked } = useBillableRatesLock();
 
 type RateType = 'default-rate' | 'custom-rate';
 
 const billableDefault = ref<'billable' | 'non-billable'>('non-billable');
 const rateType = ref<RateType>('default-rate');
+const originallyBillable = ref(false);
+const billableFlagLocked = computed(() => billableRatesLocked.value && !originallyBillable.value);
 
 const billableRate = defineModel<number | null>('billableRate');
 const isBillable = defineModel<boolean>('isBillable');
 
 onMounted(() => {
+    originallyBillable.value = isBillable.value === true;
     if (isBillable.value === true) {
         billableDefault.value = 'billable';
         rateType.value = billableRate.value ? 'custom-rate' : 'default-rate';
@@ -55,7 +52,7 @@ watch(rateType, () => {
         billableDefault.value = 'billable';
         isBillable.value = true;
         if (!billableRate.value) {
-            billableRate.value = organization.value?.billable_rate ?? null;
+            billableRate.value = props.organizationBillableRate ?? null;
         }
     }
 });
@@ -63,7 +60,7 @@ watch(rateType, () => {
 const displayedRate = computed({
     get() {
         if (rateType.value === 'default-rate') {
-            return organization.value?.billable_rate ?? null;
+            return props.organizationBillableRate ?? null;
         }
         return billableRate.value;
     },
@@ -75,6 +72,9 @@ const displayedRate = computed({
 });
 
 const billableDescription = computed(() => {
+    if (billableFlagLocked.value) {
+        return 'Your organization’s plan does not allow enabling billable projects.';
+    }
     if (billableDefault.value === 'non-billable') {
         return 'New time entries for this project will not be marked billable by default.';
     }
@@ -93,14 +93,19 @@ const emit = defineEmits(['submit']);
             </SelectTrigger>
             <SelectContent>
                 <SelectItem value="non-billable">Non-billable</SelectItem>
-                <SelectItem value="billable">Billable</SelectItem>
+                <SelectItem value="billable" :disabled="billableFlagLocked">Billable</SelectItem>
             </SelectContent>
         </Select>
         <FieldDescription>{{ billableDescription }}</FieldDescription>
     </Field>
     <Field>
         <FieldLabel :icon="BillableIcon" for="billableRateType">Billable Rate</FieldLabel>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <BillableRateInput
+            v-if="billableRatesLocked"
+            v-model="displayedRate"
+            :currency="currency"
+            name="billableRate" />
+        <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <Select v-model="rateType">
                 <SelectTrigger id="billableRateType">
                     <SelectValue />

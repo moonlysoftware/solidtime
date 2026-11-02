@@ -4,12 +4,19 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\Role;
+use App\Events\AfterCreateOrganization;
+use App\Http\Requests\V1\Organization\OrganizationDestroyRequest;
+use App\Http\Requests\V1\Organization\OrganizationStoreRequest;
 use App\Http\Requests\V1\Organization\OrganizationUpdateRequest;
 use App\Http\Resources\V1\Organization\OrganizationResource;
 use App\Models\Organization;
 use App\Service\BillableRateService;
+use App\Service\DeletionService;
+use App\Service\IpLookup\IpLookupServiceContract;
+use App\Service\OrganizationService;
+use App\Service\UserService;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Http\JsonResponse;
 
 class OrganizationController extends Controller
 {
@@ -20,11 +27,11 @@ class OrganizationController extends Controller
      *
      * @throws AuthorizationException
      */
-    public function show(Organization $organization): OrganizationResource
+    public function show(Organization $organization, BillableRateService $billableRateService): OrganizationResource
     {
         $this->checkPermission($organization, 'organizations:view');
 
-        $showBillableRate = $this->member($organization)->role !== Role::Employee->value || $organization->employees_can_see_billable_rates;
+        $showBillableRate = $billableRateService->canSeeBillableRates($organization, $this->member($organization));
 
         return new OrganizationResource($organization, $showBillableRate);
     }
@@ -39,11 +46,16 @@ class OrganizationController extends Controller
     public function update(Organization $organization, OrganizationUpdateRequest $request, BillableRateService $billableRateService): OrganizationResource
     {
         $this->checkPermission($organization, 'organizations:update');
+        $canUseBillableRates = $this->canUseBillableRates($organization);
 
         if ($request->getName() !== null) {
             $organization->name = $request->getName();
         }
-        if ($request->getEmployeesCanSeeBillableRates() !== null) {
+        if ($request->getCurrency() !== null) {
+            $organization->currency = $request->getCurrency();
+        }
+        // Organizations that can not use billable rates can keep or remove the visibility for employees, but not enable it
+        if ($request->getEmployeesCanSeeBillableRates() !== null && ($canUseBillableRates || ! $request->getEmployeesCanSeeBillableRates())) {
             $organization->employees_can_see_billable_rates = $request->getEmployeesCanSeeBillableRates();
         }
         if ($request->getEmployeesCanManageTasks() !== null) {
@@ -67,17 +79,61 @@ class OrganizationController extends Controller
         if ($request->getPreventOverlappingTimeEntries() !== null) {
             $organization->prevent_overlapping_time_entries = $request->getPreventOverlappingTimeEntries();
         }
-        $hasBillableRate = $request->has('billable_rate');
-        if ($hasBillableRate) {
-            $oldBillableRate = $organization->billable_rate;
+        if ($request->getBreaksEnabled() !== null) {
+            $organization->breaks_enabled = $request->getBreaksEnabled();
+        }
+        $oldBillableRate = $organization->billable_rate;
+        if ($request->has('billable_rate') && $canUseBillableRates) {
             $organization->billable_rate = $request->getBillableRate();
         }
         $organization->save();
 
-        if ($hasBillableRate && $oldBillableRate !== $request->getBillableRate()) {
+        if ($oldBillableRate !== $organization->billable_rate) {
             $billableRateService->updateTimeEntriesBillableRateForOrganization($organization);
         }
 
         return new OrganizationResource($organization, true);
+    }
+
+    /**
+     * Create organization
+     *
+     * @operationId createOrganization
+     */
+    public function store(OrganizationStoreRequest $request, OrganizationService $organizationService): OrganizationResource
+    {
+        $user = $this->user();
+        $ipLookupResponse = app(IpLookupServiceContract::class)->lookup($request->ip());
+
+        $currency = $ipLookupResponse?->currency;
+
+        $organization = $organizationService->createOrganization(
+            $request->getName(),
+            $user,
+            false,
+            $currency
+        );
+
+        app(UserService::class)->switchCurrentOrganization($user, $organization);
+
+        AfterCreateOrganization::dispatch($organization);
+
+        return new OrganizationResource($organization, true);
+    }
+
+    /**
+     * Delete organization
+     *
+     * @operationId deleteOrganization
+     *
+     * @throws AuthorizationException
+     */
+    public function destroy(Organization $organization, OrganizationDestroyRequest $request, DeletionService $deletionService): JsonResponse
+    {
+        $this->checkPermission($organization, 'organizations:delete');
+
+        $deletionService->deleteOrganization($organization);
+
+        return response()->json(null, 204);
     }
 }

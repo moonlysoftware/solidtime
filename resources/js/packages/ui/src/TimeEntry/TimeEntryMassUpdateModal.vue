@@ -15,19 +15,17 @@ import {
     type UpdateMultipleTimeEntriesChangeset,
 } from '@/packages/api/src';
 import { Checkbox } from '@/packages/ui/src';
-import { TagIcon } from '@heroicons/vue/20/solid';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/Components/ui/select';
+import { TagIcon, ExclamationTriangleIcon } from '@heroicons/vue/20/solid';
+import { XMarkIcon } from '@heroicons/vue/16/solid';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '..';
 import { Button } from '@/packages/ui/src/Buttons';
 import TagDropdown from '@/packages/ui/src/Tag/TagDropdown.vue';
+import { useBillableRatesLock } from '@/packages/ui/src/utils/useBillableRatesLock';
 import type { Tag, Task } from '@/packages/api/src';
 
 const show = defineModel('show', { default: false });
+// Organizations with locked billable rates can remove the billable flag, but not set it
+const { locked: billableRatesLocked } = useBillableRatesLock();
 const saving = ref(false);
 
 const props = defineProps<{
@@ -41,6 +39,7 @@ const props = defineProps<{
     createTag: (name: string) => Promise<Tag | undefined>;
     updateTimeEntries: (changeset: UpdateMultipleTimeEntriesChangeset) => Promise<void>;
     currency: string;
+    organizationBillableRate: number | null;
     enableEstimatedTime: boolean;
     canCreateProject: boolean;
 }>();
@@ -64,6 +63,13 @@ const taskId = ref<string | null | undefined>(undefined);
 const projectId = ref<string | null>(null);
 const billable = ref<boolean | undefined>(undefined);
 const selectedTags = ref<string[]>([]);
+
+// Clearing the project puts both fields back to "leave unchanged", the same state the form
+// returns to after a successful submit.
+function resetProject() {
+    projectId.value = null;
+    taskId.value = undefined;
+}
 
 const timeEntryBillable = computed({
     get: () => {
@@ -134,10 +140,25 @@ watch(removeAllTags, () => {
         selectedTags.value = [];
     }
 });
+
+const selectedBreaksCount = computed(
+    () => props.timeEntries.filter((entry) => entry.type === 'break').length
+);
+
+// Mirrors the server-side skip in TimeEntryController::updateMultiple: a break
+// entry is skipped entirely when the changeset assigns a project, makes it
+// billable, or adds tags (clearing tags via removeAllTags is fine).
+const showBreakWarning = computed(
+    () =>
+        selectedBreaksCount.value > 0 &&
+        ((projectId.value !== null && projectId.value !== '') ||
+            billable.value === true ||
+            selectedTags.value.length > 0)
+);
 </script>
 
 <template>
-    <DialogModal closeable :show="show" @close="show = false">
+    <DialogModal closeable :show="show" @close="show = false" @submit="submit">
         <template #title>
             <div class="flex space-x-2">
                 <span> Update {{ timeEntries.length }} time entries </span>
@@ -146,6 +167,20 @@ watch(removeAllTags, () => {
 
         <template #content>
             <div class="space-y-4">
+                <div
+                    v-if="showBreakWarning"
+                    data-testid="mass_update_break_warning"
+                    class="flex items-start space-x-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-600 dark:text-amber-400">
+                    <ExclamationTriangleIcon class="w-4 h-4 mt-0.5 shrink-0" />
+                    <span>
+                        {{ selectedBreaksCount }}
+                        {{ selectedBreaksCount === 1 ? 'break is' : 'breaks are' }} selected —
+                        breaks can not have a project or tags, or be billable, so
+                        {{ selectedBreaksCount === 1 ? 'this entry' : 'these entries' }} will be
+                        skipped entirely and none of the changes (including the description) will be
+                        applied to {{ selectedBreaksCount === 1 ? 'it' : 'them' }}.
+                    </span>
+                </div>
                 <Field>
                     <FieldLabel for="description">Description</FieldLabel>
                     <TextInput
@@ -158,41 +193,59 @@ watch(removeAllTags, () => {
                 </Field>
                 <Field>
                     <FieldLabel for="project">Project</FieldLabel>
-                    <TimeTrackerProjectTaskDropdown
-                        v-model:project="projectId"
-                        v-model:task="taskId"
-                        variant="input"
-                        align="start"
-                        size="default"
-                        :clients
-                        :create-project
-                        :create-client
-                        :currency="currency"
-                        :can-create-project
-                        empty-placeholder="Select project..."
-                        allow-reset
-                        :enable-estimated-time
-                        :projects="projects"
-                        :tasks="tasks"></TimeTrackerProjectTaskDropdown>
+                    <div class="flex items-center gap-1 min-w-0">
+                        <!-- the dropdown declares its own `class` prop, which goes to the
+                             trigger button, so the growing has to happen on a wrapper -->
+                        <div class="flex-1 min-w-0">
+                            <TimeTrackerProjectTaskDropdown
+                                v-model:project="projectId"
+                                v-model:task="taskId"
+                                variant="input"
+                                align="start"
+                                size="default"
+                                :clients
+                                :create-project
+                                :create-client
+                                :currency="currency"
+                                :organization-billable-rate="organizationBillableRate"
+                                :can-create-project
+                                empty-placeholder="Select project..."
+                                :enable-estimated-time
+                                :projects="projects"
+                                :tasks="tasks"></TimeTrackerProjectTaskDropdown>
+                        </div>
+                        <button
+                            v-if="projectId !== null"
+                            type="button"
+                            data-testid="project_reset_button"
+                            class="p-1 rounded hover:bg-quaternary text-text-tertiary hover:text-text-primary"
+                            @click="resetProject">
+                            <XMarkIcon class="w-4 h-4" />
+                        </button>
+                    </div>
                 </Field>
                 <Field>
                     <FieldLabel>Tag</FieldLabel>
-                    <div class="flex space-x-5">
-                        <TagDropdown
-                            v-model="selectedTags"
-                            :create-tag
-                            :tags="tags"
-                            :show-no-tag-option="false">
-                            <template #trigger>
-                                <Button variant="input" :disabled="removeAllTags">
-                                    <TagIcon class="h-4 text-icon-default" />
-                                    <span v-if="selectedTags.length > 0">
-                                        Set {{ selectedTags.length }} tags
-                                    </span>
-                                    <span v-else>Select Tags...</span>
-                                </Button>
-                            </template>
-                        </TagDropdown>
+                    <div class="flex items-center space-x-5">
+                        <!-- the dropdown root is `min-w-0`, so as a flex item it would shrink
+                             below its trigger and let the button overflow into the checkbox -->
+                        <div class="shrink-0">
+                            <TagDropdown
+                                v-model="selectedTags"
+                                :create-tag
+                                :tags="tags"
+                                :show-no-tag-option="false">
+                                <template #trigger>
+                                    <Button variant="input" :disabled="removeAllTags">
+                                        <TagIcon class="h-4 text-icon-default" />
+                                        <span v-if="selectedTags.length > 0">
+                                            Set {{ selectedTags.length }} tags
+                                        </span>
+                                        <span v-else>Select Tags...</span>
+                                    </Button>
+                                </template>
+                            </TagDropdown>
+                        </div>
                         <Field orientation="horizontal">
                             <Checkbox id="no_tags" v-model:checked="removeAllTags"></Checkbox>
                             <FieldLabel for="no_tags">Remove all tags</FieldLabel>
@@ -213,7 +266,9 @@ watch(removeAllTags, () => {
                             <SelectItem value="do-not-update">
                                 Keep current billable status
                             </SelectItem>
-                            <SelectItem value="billable">Billable</SelectItem>
+                            <SelectItem value="billable" :disabled="billableRatesLocked"
+                                >Billable</SelectItem
+                            >
                             <SelectItem value="non-billable">Non Billable</SelectItem>
                         </SelectContent>
                     </Select>

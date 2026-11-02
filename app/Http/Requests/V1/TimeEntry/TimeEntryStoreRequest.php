@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\V1\TimeEntry;
 
+use App\Enums\TimeEntryType;
 use App\Http\Requests\V1\BaseFormRequest;
 use App\Models\Member;
 use App\Models\Organization;
@@ -11,9 +12,11 @@ use App\Models\Project;
 use App\Models\Tag;
 use App\Models\Task;
 use App\Service\PermissionStore;
+use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Validation\Rule;
 use Korridor\LaravelModelValidationRules\Rules\ExistsEloquent;
 
 /**
@@ -24,12 +27,12 @@ class TimeEntryStoreRequest extends BaseFormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * @return array<string, array<string|ValidationRule>>
+     * @return array<string, array<string|Closure|ValidationRule|\Illuminate\Contracts\Validation\Rule>>
      */
     public function rules(): array
     {
         return [
-            // ID of the organization member that the time entry should belong to
+            // ID of the organization member that the time entry should belong to (a member ID from GET /v1/users/me/memberships or the members list, not a user ID)
             'member_id' => [
                 'required',
                 'string',
@@ -42,6 +45,7 @@ class TimeEntryStoreRequest extends BaseFormRequest
                 'nullable',
                 'string',
                 'required_with:task_id',
+                'prohibited_if:type,break',
                 ExistsEloquent::make(Project::class, null, function (Builder $builder): Builder {
                     /** @var Builder<Project> $builder */
                     $builder = $builder->whereBelongsTo($this->organization, 'organization');
@@ -60,6 +64,7 @@ class TimeEntryStoreRequest extends BaseFormRequest
             'task_id' => [
                 'nullable',
                 'string',
+                'prohibited_if:type,break',
                 ExistsEloquent::make(Task::class, null, function (Builder $builder): Builder {
                     /** @var Builder<Task> $builder */
                     return $builder->whereBelongsTo($this->organization, 'organization');
@@ -81,10 +86,20 @@ class TimeEntryStoreRequest extends BaseFormRequest
                 'date_format:Y-m-d\TH:i:s\Z',
                 'after_or_equal:start',
             ],
-            // Whether time entry is billable
+            // Whether time entry is billable. Not derived from the project: set it to the project's is_billable value to match the web app
             'billable' => [
                 'required',
                 'boolean',
+                'declined_if:type,break',
+            ],
+            // Type of the time entry (work time or a break)
+            'type' => [
+                Rule::enum(TimeEntryType::class),
+                function (string $attribute, mixed $value, Closure $fail): void {
+                    if ($value === TimeEntryType::Break->value && ! $this->organization->breaks_enabled) {
+                        $fail('Breaks are disabled for this organization.');
+                    }
+                },
             ],
             // Description of time entry
             'description' => [
@@ -96,6 +111,7 @@ class TimeEntryStoreRequest extends BaseFormRequest
             'tags' => [
                 'nullable',
                 'array',
+                'prohibited_if:type,break',
             ],
             'tags.*' => [
                 ExistsEloquent::make(Tag::class, null, function (Builder $builder): Builder {

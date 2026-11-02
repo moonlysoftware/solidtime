@@ -4,13 +4,14 @@ import CardTitle from '@/packages/ui/src/CardTitle.vue';
 import { usePage } from '@inertiajs/vue3';
 import { type User } from '@/types/models';
 import { computed, onMounted, watch } from 'vue';
-import dayjs from 'dayjs';
-import utc from 'dayjs/plugin/utc';
-import duration from 'dayjs/plugin/duration';
+import { getDayJsInstance } from '@/packages/ui/src/utils/time';
+import { useBreaksEnabled } from '@/packages/ui/src/utils/useBreaksEnabled';
 
-import { useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
+import { getLastWorkTimeEntry, useCurrentTimeEntryStore } from '@/utils/useCurrentTimeEntry';
 import { storeToRefs } from 'pinia';
 import { getCurrentOrganizationId } from '@/utils/useUser';
+import { useLocalStorage } from '@vueuse/core';
+import { useOrganizationQuery } from '@/utils/useOrganizationQuery';
 import { switchOrganization } from '@/utils/useOrganization';
 import { useProjectsQuery } from '@/utils/useProjectsQuery';
 import { useTasksQuery } from '@/utils/useTasksQuery';
@@ -19,6 +20,7 @@ import { useClientsQuery } from '@/utils/useClientsQuery';
 import { useTagsStore } from '@/utils/useTags';
 import { useProjectsStore } from '@/utils/useProjects';
 import TimeTrackerControls from '@/packages/ui/src/TimeTracker/TimeTrackerControls.vue';
+import type { TimeTrackerMode } from '@/packages/ui/src/TimeTracker/types';
 import type {
     CreateClientBody,
     CreateProjectBody,
@@ -43,13 +45,15 @@ const page = usePage<{
         user: User;
     };
 }>();
-dayjs.extend(duration);
+const dayjs = getDayJsInstance();
 
-dayjs.extend(utc);
+const { organization } = useOrganizationQuery(getCurrentOrganizationId()!);
+const breaksEnabled = useBreaksEnabled(organization);
 
 const currentTimeEntryStore = useCurrentTimeEntryStore();
-const { currentTimeEntry, isActive, now } = storeToRefs(currentTimeEntryStore);
-const { startLiveTimer, stopLiveTimer, setActiveState } = currentTimeEntryStore;
+const { currentTimeEntry, isActive, isOnBreak, now } = storeToRefs(currentTimeEntryStore);
+const { startLiveTimer, stopLiveTimer, setActiveState, startBreak, resumeWorkAfterBreak } =
+    currentTimeEntryStore;
 
 const { projects } = useProjectsQuery();
 const { tasks } = useTasksQuery();
@@ -64,6 +68,8 @@ const showManualTimeEntryModal = ref(false);
 const { createTimeEntry: createTimeEntryMutation, deleteTimeEntry } = useTimeEntriesMutations();
 const { data: timeEntriesData } = useTimeEntriesInfiniteQuery();
 const timeEntries = computed(() => timeEntriesData.value?.pages.flatMap((page) => page.data) || []);
+const lastWorkTimeEntry = computed(() => getLastWorkTimeEntry(timeEntries.value));
+const canResumeAfterBreak = computed(() => lastWorkTimeEntry.value !== null);
 
 watch(isActive, () => {
     if (isActive.value) {
@@ -120,6 +126,14 @@ async function createTimeEntry(timeEntry: Omit<CreateTimeEntryBody, 'member_id'>
     showManualTimeEntryModal.value = false;
 }
 
+async function resumePreviousWorkAfterBreak() {
+    const timeEntry = lastWorkTimeEntry.value;
+    if (!timeEntry) {
+        return;
+    }
+    await resumeWorkAfterBreak(timeEntry);
+}
+
 async function createTimeEntryFromCurrentEntry() {
     const { start, end, description, project_id, task_id, billable, tags } = currentTimeEntry.value;
     await createTimeEntry({ start, end, description, project_id, task_id, billable, tags });
@@ -139,6 +153,16 @@ async function discardCurrentTimeEntry() {
     }
 }
 
+// Time tracker UI mode is a per-device UI preference, stored client-side and keyed by organization
+const timeTrackerMode = useLocalStorage<TimeTrackerMode>(
+    `solidtime/time-tracker-mode/${getCurrentOrganizationId()}`,
+    'project'
+);
+
+function toggleTimeTrackerMode() {
+    timeTrackerMode.value = timeTrackerMode.value === 'simple' ? 'project' : 'simple';
+}
+
 const { tags } = useTagsQuery();
 </script>
 
@@ -152,12 +176,13 @@ const { tags } = useTagsQuery();
         :create-time-entry="createTimeEntry"
         :currency="getOrganizationCurrencyString()"
         :can-create-project="canCreateProjects()"
+        :organization-billable-rate="organization?.billable_rate ?? null"
         :projects
         :tasks
         :tags
         :clients></TimeEntryCreateModal>
     <CardTitle title="Time Tracker" :icon="ClockIcon"></CardTitle>
-    <div class="relative pt-1">
+    <div class="relative pt-1.5">
         <TimeTrackerRunningInDifferentOrganizationOverlay
             v-if="isRunningInDifferentOrganization"
             @switch-organization="
@@ -173,6 +198,7 @@ const { tags } = useTagsQuery();
                         :create-project
                         :enable-estimated-time="isAllowedToPerformPremiumAction()"
                         :can-create-project="canCreateProjects()"
+                        :organization-billable-rate="organization?.billable_rate ?? null"
                         :create-client
                         :clients
                         :tags
@@ -181,17 +207,29 @@ const { tags } = useTagsQuery();
                         :time-entries
                         :create-tag
                         :is-active
+                        :is-on-break="isOnBreak"
+                        :breaks-enabled="breaksEnabled"
+                        :can-resume-after-break="canResumeAfterBreak"
+                        :resume-description="lastWorkTimeEntry?.description ?? null"
+                        :time-tracker-mode="timeTrackerMode"
                         :currency="getOrganizationCurrencyString()"
                         @start-live-timer="startLiveTimer"
                         @stop-live-timer="stopLiveTimer"
                         @start-timer="setActiveState(true)"
                         @stop-timer="setActiveState(false)"
+                        @start-break="startBreak"
+                        @resume-after-break="resumePreviousWorkAfterBreak"
                         @update-time-entry="updateTimeEntry"
                         @create-time-entry="createTimeEntryFromCurrentEntry"></TimeTrackerControls>
                 </div>
                 <TimeTrackerMoreOptionsDropdown
                     :has-active-timer="isActive"
+                    :time-tracker-mode="timeTrackerMode"
+                    :is-on-break="isOnBreak"
+                    :breaks-enabled="breaksEnabled"
                     @manual-entry="showManualTimeEntryModal = true"
+                    @start-break="startBreak"
+                    @toggle-time-tracker-mode="toggleTimeTrackerMode"
                     @discard="discardCurrentTimeEntry"></TimeTrackerMoreOptionsDropdown>
             </div>
         </div>

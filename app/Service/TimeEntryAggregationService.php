@@ -20,6 +20,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use InvalidArgumentException;
 
 class TimeEntryAggregationService
 {
@@ -74,8 +75,9 @@ class TimeEntryAggregationService
         $startRawSelect = app(TimeEntryService::class)->getStartSelectRawForRounding($roundingType, $roundingMinutes);
         $endRawSelect = app(TimeEntryService::class)->getEndSelectRawForRounding($roundingType, $roundingMinutes);
 
+        // SQL fragments come from enum cases, integer offsets, and formatted dates.
         $timeEntriesQuery->selectRaw(
-            ($group1Select !== null ? $group1Select.' as group_1,' : '').
+            ($group1Select !== null ? $group1Select.' as group_1,' : ''). // @phpstan-ignore argument.type
             ($group2Select !== null ? $group2Select.' as group_2,' : '').
             ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')))) as aggregate,'.
             ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')) * (coalesce(billable_rate, 0)::float/60/60))) as cost'
@@ -104,7 +106,7 @@ class TimeEntryAggregationService
                 $baseTotalsPerGroup1Query = $baseTotalsQuery->clone();
                 $baseTotalsPerGroup1 = $baseTotalsPerGroup1Query
                     ->selectRaw(
-                        $group1Select.' as group_1,'.
+                        $group1Select.' as group_1,'. // @phpstan-ignore argument.type
                         ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')))) as aggregate,'.
                         ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')) * (coalesce(billable_rate, 0)::float/60/60))) as cost'
                     )
@@ -169,7 +171,7 @@ class TimeEntryAggregationService
                 // Reset selects and ordering on the cloned base query
                 $baseTotals = $baseTotalsQuery
                     ->selectRaw(
-                        ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')))) as aggregate,'.
+                        ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')))) as aggregate,'. // @phpstan-ignore argument.type
                         ' round(sum(extract(epoch from ('.$endRawSelect.' - '.$startRawSelect.')) * (coalesce(billable_rate, 0)::float/60/60))) as cost'
                     )
                     ->first();
@@ -353,6 +355,13 @@ class TimeEntryAggregationService
                     'color' => null,
                 ];
             }
+        } elseif ($type === TimeEntryAggregationType::Type) {
+            foreach ($keys as $key) {
+                $descriptorMap[$key] = [
+                    'description' => $key === 'break' ? 'Break' : 'Work time',
+                    'color' => null,
+                ];
+            }
         } elseif ($type === TimeEntryAggregationType::Tag) {
             $tags = Tag::query()
                 ->whereIn('id', $keys)
@@ -401,6 +410,9 @@ class TimeEntryAggregationService
     {
         $interval = $groupType->toInterval();
         if ($interval === null) {
+            if ($subGroupType === null) {
+                return $data;
+            }
             foreach ($data as $key => $item) {
                 $data[$key]['grouped_data'] = $this->fillGapsInTimeGroups(
                     $item['grouped_data'],
@@ -504,6 +516,8 @@ class TimeEntryAggregationService
             return 'client_id';
         } elseif ($group === TimeEntryAggregationType::Billable) {
             return 'billable';
+        } elseif ($group === TimeEntryAggregationType::Type) {
+            return 'type';
         } elseif ($group === TimeEntryAggregationType::Description) {
             return 'description';
         } elseif ($group === TimeEntryAggregationType::Tag) {
@@ -517,7 +531,7 @@ class TimeEntryAggregationService
     public function timeSlotsBetween(Carbon $start, Carbon $end, string $timezone, Weekday $startOfWeek, TimeEntryAggregationTypeInterval $interval, string $format): Collection
     {
         if ($start->gt($end)) {
-            throw new \InvalidArgumentException('Start date must be before end date');
+            throw new InvalidArgumentException('Start date must be before end date');
         }
         $slots = new Collection;
         $current = $start->copy()->timezone($timezone);
@@ -530,7 +544,7 @@ class TimeEntryAggregationService
         } elseif ($interval === TimeEntryAggregationTypeInterval::Year) {
             $current->startOfYear();
         } else {
-            throw new \InvalidArgumentException('Invalid interval');
+            throw new InvalidArgumentException('Invalid interval');
         }
 
         while ($current->lt($end)) {

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use App\Enums\Role;
 use App\Enums\Weekday;
 use App\Models\Concerns\CustomAuditable;
 use App\Models\Concerns\HasUuids;
@@ -19,14 +20,11 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\Pivot;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 use Laravel\Fortify\TwoFactorAuthenticatable;
-use Laravel\Jetstream\HasProfilePhoto;
-use Laravel\Jetstream\HasTeams;
 use Laravel\Passport\AuthCode;
 use Laravel\Passport\Contracts\OAuthenticatable;
 use Laravel\Passport\HasApiTokens;
@@ -36,21 +34,26 @@ use OwenIt\Auditing\Contracts\Auditable as AuditableContract;
  * @property string $id
  * @property string $name
  * @property string $email
+ * @property string|null $pending_email
  * @property Carbon|null $email_verified_at
  * @property string|null $password
+ * @property string|null $remember_token
  * @property string|null $two_factor_secret
+ * @property string|null $two_factor_recovery_codes
+ * @property Carbon|null $two_factor_confirmed_at
  * @property string $timezone
  * @property bool $is_placeholder
  * @property Weekday $week_start
+ * @property bool $send_time_entry_still_running_email
  * @property string|null $profile_photo_path
  * @property-read Organization|null $currentOrganization
- * @property-read Organization|null $currentTeam
  * @property-read string $profile_photo_url
  * @property-read Collection<int, Token> $tokens
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property string|null $current_team_id
  * @property Collection<int, Organization> $organizations
+ * @property Collection<int, Organization> $ownedOrganizations
  * @property Collection<int, TimeEntry> $timeEntries
  * @property Member $membership
  *
@@ -68,8 +71,6 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
     /** @use HasFactory<UserFactory> */
     use HasFactory;
 
-    use HasProfilePhoto;
-    use HasTeams;
     use HasUuids;
     use Notifiable;
     use TwoFactorAuthenticatable;
@@ -105,10 +106,12 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
     protected $casts = [
         'name' => 'string',
         'email' => 'string',
+        'pending_email' => 'string',
         'email_verified_at' => 'datetime',
         'is_admin' => 'boolean',
         'is_placeholder' => 'boolean',
         'week_start' => Weekday::class,
+        'send_time_entry_still_running_email' => 'boolean',
     ];
 
     /**
@@ -118,7 +121,18 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
      */
     protected $attributes = [
         'week_start' => Weekday::Monday,
+        'send_time_entry_still_running_email' => true,
     ];
+
+    public function getAuditOwnerUserId(): ?string
+    {
+        return $this->getKey();
+    }
+
+    protected function isAuditOwnerOfItself(): bool
+    {
+        return true;
+    }
 
     /**
      * Get the URL to the user's profile photo.
@@ -129,14 +143,39 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
     {
         return Attribute::get(function (): string {
             return $this->profile_photo_path
-                ? Storage::disk($this->profilePhotoDisk())->url($this->profile_photo_path)
+                ? Storage::disk(config('filesystems.public'))->url($this->profile_photo_path)
                 : $this->defaultProfilePhotoUrl();
         });
     }
 
+    /**
+     * Get the default profile photo URL if no profile photo has been uploaded.
+     */
+    protected function defaultProfilePhotoUrl(): string
+    {
+        $name = trim(collect(explode(' ', $this->name))->map(function ($segment) {
+            return mb_substr($segment, 0, 1);
+        })->join(' '));
+
+        return 'https://ui-avatars.com/api/?name='.urlencode($name).'&color=7F9CF5&background=EBF4FF';
+    }
+
     public function canAccessPanel(Panel $panel): bool
     {
-        return in_array($this->email, config('auth.super_admins', []), true) && $this->hasVerifiedEmail();
+        return $this->is_placeholder === false
+            && in_array($this->email, config('auth.super_admins', []), true)
+            && $this->hasVerifiedEmail();
+    }
+
+    public function isMemberOfOrganization(Organization $organization): bool
+    {
+        if ($this->relationLoaded('organizations')) {
+            return $this->organizations->contains(function (Organization $o) use ($organization): bool {
+                return $o->getKey() === $organization->getKey();
+            });
+        }
+
+        return $this->organizations()->whereKey($organization->getKey())->exists();
     }
 
     public function canBeImpersonated(): bool
@@ -145,7 +184,7 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
     }
 
     /**
-     * @return BelongsToMany<Organization, $this, Pivot, 'membership'>
+     * @return BelongsToMany<Organization, $this, Member, 'membership'>
      */
     public function organizations(): BelongsToMany
     {
@@ -157,6 +196,14 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
             ])
             ->withTimestamps()
             ->as('membership');
+    }
+
+    /**
+     * @return BelongsToMany<Organization, $this, Member, 'membership'>
+     */
+    public function ownedOrganizations(): BelongsToMany
+    {
+        return $this->organizations()->wherePivot('role', Role::Owner->value);
     }
 
     /**
@@ -213,12 +260,8 @@ class User extends Authenticatable implements AuditableContract, FilamentUser, M
      */
     public function scopeBelongsToOrganization(Builder $builder, Organization $organization): Builder
     {
-        return $builder->where(function (Builder $builder) use ($organization): Builder {
-            return $builder->whereHas('organizations', function (Builder $query) use ($organization): void {
-                $query->whereKey($organization->getKey());
-            })->orWhereHas('ownedTeams', function (Builder $query) use ($organization): void {
-                $query->whereKey($organization->getKey());
-            });
+        return $builder->whereHas('organizations', function (Builder $query) use ($organization): void {
+            $query->whereKey($organization->getKey());
         });
     }
 }

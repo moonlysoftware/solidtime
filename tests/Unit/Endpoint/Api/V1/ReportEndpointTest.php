@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Endpoint\Api\V1;
 
+use App\Enums\TagMatchType;
 use App\Enums\TimeEntryAggregationType;
 use App\Enums\TimeEntryRoundingType;
+use App\Enums\TimeEntryType;
 use App\Enums\Weekday;
 use App\Http\Controllers\Api\V1\ReportController;
 use App\Models\Client;
@@ -51,7 +53,7 @@ class ReportEndpointTest extends ApiEndpointTestAbstract
         // Assert
         $response->assertStatus(200);
         $response->assertJsonCount(4, 'data');
-        $reports = Report::query()->orderBy('created_at', 'desc')->get();
+        $reports = Report::query()->orderBy('created_at', 'desc')->orderBy('id')->get();
         $response->assertJson(fn (AssertableJson $json) => $json
             ->has('data')
             ->has('links')
@@ -221,6 +223,66 @@ class ReportEndpointTest extends ApiEndpointTestAbstract
         // Also verify the properties are saved in the database
         $this->assertSame(TimeEntryRoundingType::Nearest, $report->properties->roundingType);
         $this->assertSame(15, $report->properties->roundingMinutes);
+    }
+
+    public function test_store_endpoint_creates_new_report_with_time_entry_type_filter(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'reports:create',
+        ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->withoutExceptionHandling()->postJson(route('api.v1.reports.store', [$data->organization->getKey()]), [
+            'name' => 'Test Report',
+            'is_public' => false,
+            'properties' => [
+                'group' => TimeEntryAggregationType::Project->value,
+                'sub_group' => TimeEntryAggregationType::Task->value,
+                'history_group' => TimeEntryAggregationType::Day->value,
+                'start' => Carbon::now()->subDays(30)->toIso8601ZuluString(),
+                'end' => Carbon::now()->toIso8601ZuluString(),
+                'time_entry_type' => TimeEntryType::Break->value,
+            ],
+        ]);
+
+        // Assert
+        $response->assertStatus(201);
+        $response->assertJsonPath(
+            'data.properties.time_entry_type',
+            TimeEntryType::Break->value
+        );
+        /** @var Report $report */
+        $report = Report::query()->findOrFail($response->json('data.id'));
+        $this->assertSame(TimeEntryType::Break, $report->properties->timeEntryType);
+    }
+
+    public function test_store_endpoint_fails_if_time_entry_type_is_invalid(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'reports:create',
+        ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.reports.store', [$data->organization->getKey()]), [
+            'name' => 'Test Report',
+            'is_public' => false,
+            'properties' => [
+                'group' => TimeEntryAggregationType::Project->value,
+                'sub_group' => TimeEntryAggregationType::Task->value,
+                'history_group' => TimeEntryAggregationType::Day->value,
+                'start' => Carbon::now()->subDays(30)->toIso8601ZuluString(),
+                'end' => Carbon::now()->toIso8601ZuluString(),
+                'time_entry_type' => 'invalid-type',
+            ],
+        ]);
+
+        // Assert
+        $response->assertStatus(422);
+        $response->assertJsonValidationErrors(['properties.time_entry_type']);
     }
 
     public function test_update_endpoint_fails_if_user_has_no_permission_to_update_report(): void
@@ -544,6 +606,51 @@ class ReportEndpointTest extends ApiEndpointTestAbstract
         );
     }
 
+    public function test_store_endpoint_stores_empty_id_filters_as_null(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'reports:create',
+        ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.reports.store', [$data->organization->getKey()]), [
+            'name' => 'Test Report with empty Filters',
+            'is_public' => false,
+            'properties' => [
+                'start' => Carbon::now()->subDays(30)->toIso8601ZuluString(),
+                'end' => Carbon::now()->toIso8601ZuluString(),
+                'group' => TimeEntryAggregationType::Project->value,
+                'sub_group' => TimeEntryAggregationType::Task->value,
+                'history_group' => TimeEntryAggregationType::Day->value,
+                'member_ids' => [],
+                'project_ids' => [],
+                'client_ids' => [],
+                'tag_ids' => [],
+                'task_ids' => [],
+            ],
+        ]);
+
+        // Assert
+        $response->assertStatus(201);
+        $response->assertJson(fn (AssertableJson $json) => $json
+            ->where('data.properties.member_ids', null)
+            ->where('data.properties.project_ids', null)
+            ->where('data.properties.client_ids', null)
+            ->where('data.properties.tag_ids', null)
+            ->where('data.properties.task_ids', null)
+            ->etc()
+        );
+        /** @var Report $report */
+        $report = Report::query()->findOrFail($response->json('data.id'));
+        $this->assertNull($report->properties->memberIds);
+        $this->assertNull($report->properties->projectIds);
+        $this->assertNull($report->properties->clientIds);
+        $this->assertNull($report->properties->tagIds);
+        $this->assertNull($report->properties->taskIds);
+    }
+
     public function test_store_endpoint_creates_report_with_none_filter_values(): void
     {
         // Arrange
@@ -684,5 +791,65 @@ class ReportEndpointTest extends ApiEndpointTestAbstract
         $this->assertDatabaseMissing(Report::class, [
             'id' => $report->getKey(),
         ]);
+    }
+
+    public function test_store_endpoint_persists_tag_match_type(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'reports:create',
+        ]);
+        $tag = Tag::factory()->forOrganization($data->organization)->create();
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->withoutExceptionHandling()->postJson(route('api.v1.reports.store', [$data->organization->getKey()]), [
+            'name' => 'Report with tag match type',
+            'is_public' => false,
+            'properties' => [
+                'start' => Carbon::now()->subDays(30)->toIso8601ZuluString(),
+                'end' => Carbon::now()->toIso8601ZuluString(),
+                'group' => TimeEntryAggregationType::Project->value,
+                'sub_group' => TimeEntryAggregationType::Task->value,
+                'history_group' => TimeEntryAggregationType::Day->value,
+                'tag_ids' => [$tag->getKey()],
+                'tag_match_type' => TagMatchType::NotContains->value,
+            ],
+        ]);
+
+        // Assert
+        $response->assertStatus(201);
+        /** @var Report $report */
+        $report = Report::query()->findOrFail($response->json('data.id'));
+        $this->assertSame(TagMatchType::NotContains, $report->properties->tagMatchType);
+        // DetailedReportResource exposes the match type in the response
+        $response->assertJsonPath('data.properties.tag_match_type', TagMatchType::NotContains->value);
+    }
+
+    public function test_store_endpoint_rejects_invalid_tag_match_type(): void
+    {
+        // Arrange
+        $data = $this->createUserWithPermission([
+            'reports:create',
+        ]);
+        Passport::actingAs($data->user);
+
+        // Act
+        $response = $this->postJson(route('api.v1.reports.store', [$data->organization->getKey()]), [
+            'name' => 'Report with invalid tag match type',
+            'is_public' => false,
+            'properties' => [
+                'start' => Carbon::now()->subDays(30)->toIso8601ZuluString(),
+                'end' => Carbon::now()->toIso8601ZuluString(),
+                'group' => TimeEntryAggregationType::Project->value,
+                'sub_group' => TimeEntryAggregationType::Task->value,
+                'history_group' => TimeEntryAggregationType::Day->value,
+                'tag_match_type' => 'invalid_value',
+            ],
+        ]);
+
+        // Assert
+        $response->assertStatus(422);
+        $response->assertInvalid(['properties.tag_match_type']);
     }
 }

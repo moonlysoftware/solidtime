@@ -44,6 +44,15 @@ class BillingContract
     }
 
     /**
+     * The maximum number of goals the organization can have; null means unlimited.
+     * Archived goals count toward the limit.
+     */
+    public function getGoalLimit(Organization $organization): ?int
+    {
+        return null;
+    }
+
+    /**
      * Check if the organization is blocked
      * A blocked organization is an organization that has more than 1 non-placeholder member but no subscription/trial
      * This can happen if:
@@ -53,5 +62,14 @@ class BillingContract
     public function isBlocked(Organization $organization): bool
     {
         return false;
+    }
+
+    /**
+     * Check if the organization can set and see billable rates
+     * Without a billing system every organization can use billable rates
+     */
+    public function canUseBillableRates(Organization $organization): bool
+    {
+        return true;
     }
 }

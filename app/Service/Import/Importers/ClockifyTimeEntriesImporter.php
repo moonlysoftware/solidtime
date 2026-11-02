@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Service\Import\Importers;
 
 use App\Enums\Role;
+use App\Enums\TimeEntryType;
 use App\Jobs\RecalculateSpentTimeForProject;
 use App\Jobs\RecalculateSpentTimeForTask;
 use App\Models\TimeEntry;
@@ -14,6 +15,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use League\Csv\Exception as CsvException;
 use League\Csv\Reader;
+use Override;
 
 class ClockifyTimeEntriesImporter extends DefaultImporter
 {
@@ -43,7 +45,7 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
     /**
      * @throws ImportException
      */
-    #[\Override]
+    #[Override]
     public function importData(string $data, string $timezone): void
     {
         try {
@@ -54,6 +56,7 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
             $reader->setEscape('');
             $header = $reader->getHeader();
             $this->validateHeader($header);
+            $taskKey = $this->getTaskKey($header);
             $records = $reader->getRecords();
             foreach ($records as $record) {
                 $userId = $this->userImportHelper->getKey([
@@ -70,8 +73,12 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
                     'role' => Role::Placeholder->value,
                 ]);
                 $member = $this->memberImportHelper->getModelById($memberId);
+                // Clockify allows a project/task/client/tags/billable on breaks, but those are
+                // meaningless for non-work time. Detect breaks up front and skip creating any of
+                // that so a break can't spawn an orphan project/tag or inflate the import counts.
+                $isBreak = isset($record['Type']) && strtolower($record['Type']) === 'break';
                 $clientId = null;
-                if ($record['Client'] !== '') {
+                if (! $isBreak && ($record['Client'] ?? '') !== '') {
                     $clientId = $this->clientImportHelper->getKey([
                         'name' => $record['Client'],
                         'organization_id' => $this->organization->id,
@@ -80,7 +87,7 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
                 $projectId = null;
                 $project = null;
                 $projectMember = null;
-                if ($record['Project'] !== '') {
+                if (! $isBreak && $record['Project'] !== '') {
                     $projectId = $this->projectImportHelper->getKey([
                         'name' => $record['Project'],
                         'client_id' => $clientId,
@@ -96,9 +103,10 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
                     ]);
                 }
                 $taskId = null;
-                if ($record['Task'] !== '') {
+                if (! $isBreak && $taskKey !== null && $record[$taskKey] !== '') {
+                    $this->checkTaskNameLength($record[$taskKey]);
                     $taskId = $this->taskImportHelper->getKey([
-                        'name' => $record['Task'],
+                        'name' => $record[$taskKey],
                         'project_id' => $projectId,
                         'organization_id' => $this->organization->id,
                     ]);
@@ -116,11 +124,18 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
                     throw new ImportException('Time entry description is too long');
                 }
                 $timeEntry->description = $record['Description'];
-                if (! in_array($record['Billable'], ['Yes', 'No'], true)) {
-                    throw new ImportException('Invalid billable value');
+                if (isset($record['Billable'])) {
+                    if (! in_array($record['Billable'], ['Yes', 'No'], true)) {
+                        throw new ImportException('Invalid billable value');
+                    }
+                    $timeEntry->billable = $this->canUseBillableRates && $record['Billable'] === 'Yes';
                 }
-                $timeEntry->billable = $record['Billable'] === 'Yes';
-                $timeEntry->tags = $this->getTags($record['Tags']);
+                if ($isBreak) {
+                    // Breaks can not be billable or belong to a project/task (already skipped above)
+                    $timeEntry->type = TimeEntryType::Break;
+                    $timeEntry->billable = false;
+                }
+                $timeEntry->tags = $isBreak ? [] : $this->getTags($record['Tags']);
                 $timeEntry->is_imported = true;
 
                 // Start
@@ -175,6 +190,9 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
                 if ($end === null) {
                     throw new ImportException('End date ("'.$endDateStr.'") or time ("'.$endTimeStr.'") are invalid');
                 }
+                if ($end->lt($start)) {
+                    throw new ImportException('End ("'.$endStr.'") is before start ("'.$startStr.'")');
+                }
                 $timeEntry->end = $end->utc();
 
                 $timeEntry->billable_rate = $this->billableRateService->getBillableRateForTimeEntryWithGivenRelations(
@@ -212,14 +230,10 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
     {
         $requiredFields = [
             'Project',
-            'Client',
             'Description',
-            'Task',
             'User',
-            'Group',
             'Email',
             'Tags',
-            'Billable',
             'Start Date',
             'Start Time',
             'End Date',
@@ -230,15 +244,35 @@ class ClockifyTimeEntriesImporter extends DefaultImporter
                 throw new ImportException('Invalid CSV header, missing field: '.$requiredField);
             }
         }
+        // Clockify names the task column "Task" or "Activity" depending on the export; accept either.
+        if ($this->getTaskKey($header) === null) {
+            throw new ImportException('Invalid CSV header, missing field: Task');
+        }
     }
 
-    #[\Override]
+    /**
+     * Clockify names the task column "Task" or "Activity" depending on the export version.
+     *
+     * @param  array<string>  $header
+     */
+    private function getTaskKey(array $header): ?string
+    {
+        foreach (['Task', 'Activity'] as $field) {
+            if (in_array($field, $header, true)) {
+                return $field;
+            }
+        }
+
+        return null;
+    }
+
+    #[Override]
     public function getName(): string
     {
         return __('importer.clockify_time_entries.name');
     }
 
-    #[\Override]
+    #[Override]
     public function getDescription(): string
     {
         return __('importer.clockify_time_entries.description');

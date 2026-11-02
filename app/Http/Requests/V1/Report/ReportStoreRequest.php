@@ -4,18 +4,22 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\V1\Report;
 
+use App\Enums\TagMatchType;
 use App\Enums\TimeEntryAggregationType;
 use App\Enums\TimeEntryAggregationTypeInterval;
 use App\Enums\TimeEntryRoundingType;
+use App\Enums\TimeEntryType;
 use App\Enums\Weekday;
 use App\Http\Requests\V1\BaseFormRequest;
 use App\Models\Organization;
 use App\Service\TimeEntryFilter;
+use Closure;
 use Illuminate\Contracts\Validation\Rule as LegacyValidationRule;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use LogicException;
 
 /**
  * @property Organization $organization Organization from model binding
@@ -25,7 +29,7 @@ class ReportStoreRequest extends BaseFormRequest
     /**
      * Get the validation rules that apply to the request.
      *
-     * @return array<string, array<string|ValidationRule|LegacyValidationRule|\Closure>>
+     * @return array<string, array<string|ValidationRule|LegacyValidationRule|Closure>>
      */
     public function rules(): array
     {
@@ -83,7 +87,7 @@ class ReportStoreRequest extends BaseFormRequest
             ],
             'properties.client_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -99,7 +103,7 @@ class ReportStoreRequest extends BaseFormRequest
             ],
             'properties.project_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -115,7 +119,7 @@ class ReportStoreRequest extends BaseFormRequest
             ],
             'properties.tag_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -124,13 +128,18 @@ class ReportStoreRequest extends BaseFormRequest
                     }
                 },
             ],
+            'properties.tag_match_type' => [
+                'nullable',
+                'string',
+                Rule::enum(TagMatchType::class),
+            ],
             'properties.task_ids' => [
                 'nullable',
                 'array',
             ],
             'properties.task_ids.*' => [
                 'string',
-                function (string $attribute, mixed $value, \Closure $fail): void {
+                function (string $attribute, mixed $value, Closure $fail): void {
                     if ($value === TimeEntryFilter::NONE_VALUE) {
                         return;
                     }
@@ -171,6 +180,12 @@ class ReportStoreRequest extends BaseFormRequest
                 'numeric',
                 'integer',
             ],
+            // Filter by time entry type
+            'properties.time_entry_type' => [
+                'nullable',
+                'string',
+                Rule::enum(TimeEntryType::class),
+            ],
         ];
     }
 
@@ -200,7 +215,7 @@ class ReportStoreRequest extends BaseFormRequest
     {
         $start = Carbon::createFromFormat('Y-m-d\TH:i:s\Z', $this->input('properties.start'));
         if ($start === null) {
-            throw new \LogicException('Start date validation is not working');
+            throw new LogicException('Start date validation is not working');
         }
 
         return $start;
@@ -210,7 +225,7 @@ class ReportStoreRequest extends BaseFormRequest
     {
         $end = Carbon::createFromFormat('Y-m-d\TH:i:s\Z', $this->input('properties.end'));
         if ($end === null) {
-            throw new \LogicException('End date validation is not working');
+            throw new LogicException('End date validation is not working');
         }
 
         return $end;
@@ -234,6 +249,15 @@ class ReportStoreRequest extends BaseFormRequest
         return null;
     }
 
+    public function getPropertyTimeEntryType(): ?TimeEntryType
+    {
+        if (! $this->has('properties.time_entry_type') || $this->input('properties.time_entry_type') === null) {
+            return null;
+        }
+
+        return TimeEntryType::from($this->input('properties.time_entry_type'));
+    }
+
     public function getPropertyGroup(): TimeEntryAggregationType
     {
         return TimeEntryAggregationType::from($this->input('properties.group'));
@@ -247,6 +271,15 @@ class ReportStoreRequest extends BaseFormRequest
     public function getPropertyHistoryGroup(): TimeEntryAggregationTypeInterval
     {
         return TimeEntryAggregationTypeInterval::from($this->input('properties.history_group'));
+    }
+
+    public function getPropertyTagMatchType(): ?TagMatchType
+    {
+        if (! $this->has('properties.tag_match_type') || $this->input('properties.tag_match_type') === null) {
+            return null;
+        }
+
+        return TagMatchType::from($this->input('properties.tag_match_type'));
     }
 
     public function getPropertyRoundingType(): ?TimeEntryRoundingType

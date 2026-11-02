@@ -8,9 +8,11 @@ use App\Enums\Role;
 use App\Events\BeforeOrganizationDeletion;
 use App\Exceptions\Api\CanNotDeleteUserWhoIsOwnerOfOrganizationWithMultipleMembers;
 use App\Models\Client;
+use App\Models\Goal;
 use App\Models\Member;
 use App\Models\Organization;
 use App\Models\OrganizationInvitation;
+use App\Models\Passport\RefreshToken;
 use App\Models\Project;
 use App\Models\ProjectMember;
 use App\Models\Report;
@@ -74,6 +76,9 @@ class DeletionService
 
         // Delete all reports
         Report::query()->whereBelongsTo($organization, 'organization')->delete();
+
+        // Delete all goals
+        Goal::query()->whereBelongsTo($organization, 'organization')->delete();
 
         // Reset the current organization
         $organization->owner()
@@ -169,11 +174,15 @@ class DeletionService
             }
         }
 
+        // Refresh tokens are not linked to the user directly, so they need to be deleted via their access tokens.
+        // Otherwise a still-valid refresh token could be used to issue a new access token for a deleted user,
+        // which fails with a foreign key violation on oauth_access_tokens.user_id.
+        RefreshToken::query()->whereIn('access_token_id', $user->accessTokens()->pluck('id'))->delete();
         $user->accessTokens()->delete();
         $user->authCodes()->delete();
 
         // Note: Since the deletion of the profile photo is not reversible via a database rollback this needs to be done last
-        $user->deleteProfilePhoto();
+        $this->userService->deleteProfilePhoto($user);
 
         $user->delete();
 

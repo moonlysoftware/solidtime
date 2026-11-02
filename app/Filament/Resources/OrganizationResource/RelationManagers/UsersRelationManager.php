@@ -12,14 +12,15 @@ use App\Models\Organization;
 use App\Models\User;
 use App\Service\BillableRateService;
 use App\Service\MemberService;
+use Filament\Actions\Action;
+use Filament\Actions\AttachAction;
+use Filament\Actions\DetachAction;
+use Filament\Actions\EditAction;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
-use Filament\Forms\Form;
 use Filament\Notifications\Notification;
 use Filament\Resources\RelationManagers\RelationManager;
-use Filament\Tables;
-use Filament\Tables\Actions\Action;
-use Filament\Tables\Actions\AttachAction;
+use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Validation\Rule;
@@ -28,10 +29,10 @@ class UsersRelationManager extends RelationManager
 {
     protected static string $relationship = 'users';
 
-    public function form(Form $form): Form
+    public function form(Schema $schema): Schema
     {
-        return $form
-            ->schema([
+        return $schema
+            ->components([
                 Select::make('role')
                     ->options(Role::class),
                 TextInput::make('billable_rate')
@@ -49,13 +50,13 @@ class UsersRelationManager extends RelationManager
         return $table
             ->recordTitleAttribute('name')
             ->columns([
-                Tables\Columns\TextColumn::make('name'),
-                Tables\Columns\TextColumn::make('role'),
+                TextColumn::make('name'),
+                TextColumn::make('role'),
                 TextColumn::make('billable_rate')
                     ->money($organization->currency, divideBy: 100),
             ])
             ->headerActions([
-                Tables\Actions\AttachAction::make()
+                AttachAction::make()
                     ->recordTitle(fn (User $record): string => "{$record->name} ({$record->email})")
                     ->form(fn (AttachAction $action): array => [
                         $action->getRecordSelect(),
@@ -75,17 +76,17 @@ class UsersRelationManager extends RelationManager
                     ->using(function (User $record, array $data): void {
                         /** @var Organization $organization */
                         $organization = $this->getOwnerRecord();
-                        app(MemberService::class)->addMember($record, $organization, Role::from($data['role']), true);
+                        app(MemberService::class)->addMember($record, $organization, ($data['role'] instanceof Role ? $data['role'] : Role::from($data['role'])), true);
                     }),
             ])
-            ->actions([
+            ->recordActions([
                 Action::make('view')
                     ->icon('heroicon-o-eye')
                     ->color('gray')
                     ->url(fn (User $record): string => UserResource::getUrl('view', [
                         'record' => $record->getKey(),
                     ])),
-                Tables\Actions\EditAction::make()
+                EditAction::make()
                     ->using(function (User $record, array $data): User {
                         /** @var Organization $organization */
                         $organization = $this->getOwnerRecord();
@@ -97,9 +98,10 @@ class UsersRelationManager extends RelationManager
                             app(BillableRateService::class)->updateTimeEntriesBillableRateForMember($member);
                         }
 
-                        if ($data['role'] !== $member->role) {
+                        $newRole = $data['role'] instanceof Role ? $data['role'] : Role::from($data['role']);
+                        if ($newRole->value !== $member->role) {
                             try {
-                                app(MemberService::class)->changeRole($member, $organization, Role::from($data['role']), true);
+                                app(MemberService::class)->changeRole($member, $organization, $newRole, true);
                             } catch (ApiException $exception) {
                                 Notification::make()
                                     ->danger()
@@ -113,7 +115,7 @@ class UsersRelationManager extends RelationManager
 
                         return $record;
                     }),
-                Tables\Actions\DetachAction::make()
+                DetachAction::make()
                     ->using(function (User $record): void {
                         /** @var Organization $organization */
                         $organization = $this->getOwnerRecord();
@@ -133,7 +135,7 @@ class UsersRelationManager extends RelationManager
                         }
                     }),
             ])
-            ->bulkActions([
+            ->toolbarActions([
             ]);
     }
 }
