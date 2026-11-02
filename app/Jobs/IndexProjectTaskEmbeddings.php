@@ -49,11 +49,7 @@ class IndexProjectTaskEmbeddings implements ShouldBeUnique, ShouldQueue
             return;
         }
         $project = $model instanceof Project ? $model : $model->project;
-        $text = implode("\n", array_filter([
-            $project->client?->name,
-            $project->name,
-            $model instanceof Task ? $model->name : null,
-        ]));
+        $text = $embeddings->documentText($project, $model instanceof Task ? $model : null);
         $key = $model instanceof Task ? ['task_id' => $model->id] : ['project_id' => $project->id, 'task_id' => null];
         $hash = hash('sha256', $text);
         if (DB::table('project_task_embeddings')->where($key)
@@ -73,6 +69,7 @@ class IndexProjectTaskEmbeddings implements ShouldBeUnique, ShouldQueue
             $model->tasks()->eachById(function (Task $task): void {
                 self::dispatch('task', $task->id)->afterCommit();
             });
+            QueueProjectTimeEntryEmbeddings::dispatch($model->id)->afterCommit();
         }
     }
 }

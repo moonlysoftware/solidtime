@@ -53,7 +53,11 @@ type ClientsWithProjectsWithTasks = ClientWithProjectsWithTasks[];
 const props = withDefaults(
     defineProps<{
         description?: string | null;
-        suggest?: (description: string) => Promise<ProjectTaskSuggestion[]>;
+        timeEntryId?: string | null;
+        suggest?: (
+            description: string,
+            excludeTimeEntryId?: string | null
+        ) => Promise<ProjectTaskSuggestion[]>;
         projects: Project[];
         tasks: Task[];
         clients: Client[];
@@ -72,6 +76,7 @@ const props = withDefaults(
     }>(),
     {
         description: null,
+        timeEntryId: null,
         suggest: undefined,
         emptyPlaceholder: 'No Project',
         noProjectValue: NO_PROJECT_ID,
@@ -82,28 +87,27 @@ const props = withDefaults(
 );
 
 const suggestions = ref<ProjectTaskSuggestion[]>([]);
-watch([open, () => props.description], async ([isOpen, description], _, onCleanup) => {
-    suggestions.value = [];
-    if (!isOpen || !description?.trim() || !props.suggest) return;
-    let active = true;
-    onCleanup(() => {
-        active = false;
-    });
-    try {
-        const result = await props.suggest(description);
-        if (active) suggestions.value = result;
-    } catch {
-        // The normal picker remains available when suggestions fail.
+watch(
+    [open, () => props.description, () => props.timeEntryId],
+    async ([isOpen, description], _, onCleanup) => {
+        suggestions.value = [];
+        if (!isOpen || !description?.trim() || !props.suggest) return;
+        let active = true;
+        onCleanup(() => {
+            active = false;
+        });
+        try {
+            const result = await props.suggest(description, props.timeEntryId);
+            if (active) suggestions.value = result;
+        } catch {
+            // The normal picker remains available when suggestions fail.
+        }
     }
-});
+);
 
-function selectSuggestion(suggestion: ProjectTaskSuggestion) {
-    project.value = suggestion.project_id;
-    task.value = suggestion.task_id;
-    open.value = false;
-    searchValue.value = '';
-    emit('changed', project.value, task.value);
-}
+watch([suggestions, () => props.projects, () => props.tasks, () => props.clients], () => {
+    if (open.value) updateFilteredResults();
+});
 
 const filteredResults = ref<ClientsWithProjectsWithTasks>([]);
 
@@ -333,7 +337,42 @@ function updateFilteredResults() {
         return 0;
     });
 
-    filteredResults.value = tempFilteredClients;
+    if (!searchTerm && suggestions.value.length) {
+        const projectRanks = new Map<string, number>();
+        const taskRanks = new Map<string, number>();
+        suggestions.value.forEach((suggestion, rank) => {
+            if (!projectRanks.has(suggestion.project_id))
+                projectRanks.set(suggestion.project_id, rank);
+            if (suggestion.task_id) taskRanks.set(suggestion.task_id, rank);
+        });
+        const suggestedProjects = tempFilteredClients
+            .flatMap((client) => client.projects)
+            .filter((project) => projectRanks.has(project.id))
+            .sort((a, b) => projectRanks.get(a.id)! - projectRanks.get(b.id)!);
+        for (const project of suggestedProjects) {
+            project.tasks.sort(
+                (a, b) =>
+                    (taskRanks.get(a.id) ?? suggestions.value.length) -
+                    (taskRanks.get(b.id) ?? suggestions.value.length)
+            );
+        }
+        if (suggestedProjects.length) {
+            const suggestedGroup = {
+                ...tempFilteredClients[0]!,
+                id: 'suggested',
+                name: 'Suggested',
+                projects: suggestedProjects,
+            };
+            for (const client of tempFilteredClients) {
+                client.projects = client.projects.filter(
+                    (project) => !projectRanks.has(project.id)
+                );
+            }
+            tempFilteredClients.unshift(suggestedGroup);
+        }
+    }
+
+    filteredResults.value = tempFilteredClients.filter((client) => client.projects.length > 0);
 }
 
 // Recompute filtered results when search value changes while open
@@ -631,23 +670,6 @@ const showCreateProject = ref(false);
                     @keydown.down.prevent="moveHighlightDown"
                     @keydown.right.prevent="expandProject"
                     @keydown.left.prevent="collapseProject" />
-                <div
-                    v-if="suggestions.length && !searchValue"
-                    class="border-b border-card-background-separator p-1">
-                    <div class="px-2 py-1 text-xs text-text-tertiary">Suggested</div>
-                    <button
-                        v-for="suggestion in suggestions"
-                        :key="suggestion.task_id ?? suggestion.project_id"
-                        type="button"
-                        data-testid="project-task-suggestion"
-                        class="block w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-card-background-active focus-visible:bg-card-background-active"
-                        @click="selectSuggestion(suggestion)">
-                        {{ suggestion.project_name
-                        }}<template v-if="suggestion.task_name">
-                            / {{ suggestion.task_name }}</template
-                        >
-                    </button>
-                </div>
                 <div
                     ref="dropdownViewport"
                     class="w-[400px] max-w-[calc(100vw-2rem)] max-h-[350px] overflow-y-scroll relative"

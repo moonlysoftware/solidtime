@@ -58,23 +58,83 @@ async function openDropdown() {
 }
 
 describe('TimeTrackerProjectTaskDropdown', () => {
-    it('shows suggestions without changing the selection until clicked', async () => {
+    it('groups suggestions into the normal expandable project/task tree with ranked tasks', async () => {
+        const project = {
+            id: 'p-1',
+            name: 'Portal',
+            color: '#fff',
+            client_id: null,
+            is_archived: false,
+        } as unknown as Project;
+        const tasks = [
+            { id: 't-design', name: 'Figma Designs', project_id: 'p-1', is_done: false },
+            { id: 't-api', name: 'Suppliers API', project_id: 'p-1', is_done: false },
+        ] as unknown as Task[];
         const suggestion = {
             project_id: 'p-1',
             project_name: 'Portal',
-            task_id: 't-1',
-            task_name: 'Login',
+            task_id: 't-api',
+            task_name: 'Suppliers API',
         };
         const suggest = vi.fn().mockResolvedValue([suggestion]);
+        const wrapper = mountDropdown({
+            description: 'Fix sign-in',
+            suggest,
+            projects: [project],
+            tasks,
+        });
+        await flushPromises();
+        expect(suggest).toHaveBeenCalledWith('Fix sign-in', null);
+        expect(wrapper.emitted('changed')).toBeUndefined();
+        expect(wrapper.text()).toContain('Suggested');
+        const rows = wrapper.findAll('[data-project-id="p-1"]');
+        expect(rows).toHaveLength(1);
+        await rows[0]!.find('button').trigger('click');
+        const taskRows = wrapper.findAll('[data-task-id]');
+        expect(taskRows.map((row) => row.attributes('data-task-id'))).toEqual([
+            't-api',
+            't-design',
+        ]);
+        await taskRows[0]!.trigger('click');
+        expect(wrapper.emitted('changed')?.at(-1)).toEqual(['p-1', 't-api']);
+    });
+
+    it('shows suggestions when project data finishes loading after the response', async () => {
+        const suggest = vi
+            .fn()
+            .mockResolvedValue([
+                { project_id: 'p-1', project_name: 'Portal', task_id: null, task_name: null },
+            ]);
         const wrapper = mountDropdown({ description: 'Fix sign-in', suggest });
         await flushPromises();
-        expect(suggest).toHaveBeenCalledWith('Fix sign-in');
-        expect(wrapper.emitted('changed')).toBeUndefined();
-        const button = wrapper.find('[data-testid="project-task-suggestion"]');
-        expect(button.text()).toContain('Portal');
-        expect(button.text()).toContain('Login');
-        await button.trigger('click');
-        expect(wrapper.emitted('changed')?.at(-1)).toEqual(['p-1', 't-1']);
+        expect(wrapper.text()).not.toContain('Suggested');
+        await wrapper.setProps({
+            projects: [
+                {
+                    id: 'p-1',
+                    name: 'Portal',
+                    color: '#fff',
+                    client_id: null,
+                    is_archived: false,
+                } as unknown as Project,
+            ],
+        });
+        await flushPromises();
+        expect(wrapper.text()).toContain('Suggested');
+        expect(wrapper.findAll('[data-project-id="p-1"]')).toHaveLength(1);
+        wrapper.unmount();
+    });
+
+    it('passes the current entry ID to exclude its own historical example', async () => {
+        const suggest = vi.fn().mockResolvedValue([]);
+        const wrapper = mountDropdown({
+            description: 'Fix sign-in',
+            timeEntryId: 'entry-1',
+            suggest,
+        });
+        await flushPromises();
+        expect(suggest).toHaveBeenCalledWith('Fix sign-in', 'entry-1');
+        wrapper.unmount();
     });
 
     it('keeps the normal picker available when suggestions fail', async () => {
@@ -83,7 +143,7 @@ describe('TimeTrackerProjectTaskDropdown', () => {
             suggest: vi.fn().mockRejectedValue(new Error('Gateway unavailable')),
         });
         await flushPromises();
-        expect(wrapper.find('[data-testid="project-task-suggestion"]').exists()).toBe(false);
+        expect(wrapper.text()).not.toContain('Suggested');
         await wrapper.find('[data-project-id=""]').trigger('click');
         expect(wrapper.emitted('changed')?.at(-1)).toEqual(['', null]);
     });

@@ -199,6 +199,7 @@ const typeProxy = computed({
                             v-model:project="editableTimeEntry.project_id"
                             v-model:task="editableTimeEntry.task_id"
                             :description="editableTimeEntry.description"
+                            :time-entry-id="editableTimeEntry.id"
                             :suggest="suggestProjectsAndTasks"
                             variant="input"
                             size="default"

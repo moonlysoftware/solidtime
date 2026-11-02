@@ -25,10 +25,11 @@ test('suggestions only select a project and task after a click', async ({ page, 
     const timer = page.getByTestId('dashboard_timer');
     await timer.getByTestId('time_entry_description').fill('Fix OAuth sign-in');
     await timer.getByRole('button', { name: 'No Project', exact: true }).click();
-    const suggestion = page.getByTestId('project-task-suggestion');
-    await expect(suggestion).toHaveText('Customer portal / Login');
+    await expect(page.getByText('Suggested', { exact: true })).toBeVisible();
+    const suggestion = page.locator(`[data-project-id="${project.id}"]`);
     await expect(timer.getByRole('button', { name: 'No Project', exact: true })).toBeVisible();
-    await suggestion.click();
+    await suggestion.getByRole('button', { name: /Tasks/ }).click();
+    await page.locator(`[data-task-id="${task.id}"]`).click();
     await expect(timer.getByRole('button', { name: /Customer portal.*Login/ })).toBeVisible();
 });
 
@@ -42,7 +43,7 @@ test('the normal picker works when suggestions fail', async ({ page, ctx }) => {
     await timer.getByTestId('time_entry_description').fill('Fix OAuth sign-in');
     await timer.getByRole('button', { name: 'No Project', exact: true }).click();
     await page.getByTestId('client_dropdown_search').fill('Customer portal');
-    await expect(page.getByTestId('project-task-suggestion')).toHaveCount(0);
+    await expect(page.getByText('Suggested', { exact: true })).toHaveCount(0);
     await page.getByRole('option').filter({ hasText: 'Customer portal' }).click();
     await expect(timer.getByRole('button', { name: 'Customer portal', exact: true })).toBeVisible();
 });

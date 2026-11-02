@@ -170,9 +170,10 @@ async function handleDeleteTimeEntry() {
                                 :fix-date="breakFixDate"
                                 :fix-in-calendar="fixInCalendar" />
                             <TimeTrackerProjectTaskDropdown
-                                :description="timeEntry.description"
-                                :suggest="suggestProjectsAndTasks"
                                 v-if="!isBreak"
+                                :description="timeEntry.description"
+                                :time-entry-id="timeEntry.id"
+                                :suggest="suggestProjectsAndTasks"
                                 class="min-w-0 shrink"
                                 :create-project
                                 :create-client
@@ -253,9 +254,10 @@ async function handleDeleteTimeEntry() {
                             <div class="flex items-center justify-between mt-1">
                                 <BreakLabel v-if="isBreak" class="pl-1.5 pr-2 min-w-0" />
                                 <TimeTrackerProjectTaskDropdown
-                                    :description="timeEntry.description"
-                                    :suggest="suggestProjectsAndTasks"
                                     v-else
+                                    :description="timeEntry.description"
+                                    :time-entry-id="timeEntry.id"
+                                    :suggest="suggestProjectsAndTasks"
                                     class="min-w-0"
                                     :create-project
                                     :create-client

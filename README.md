@@ -67,18 +67,23 @@ Suggestions use existing project/task/client names. Vectors live in a separate
 `project_task_embeddings` table; existing model fields are unchanged.
 Configure `GATEWAY_URL`, `GATEWAY_API_KEY`, and `GATEWAY_EMBEDDING_MODEL` (default:
 `qwen3-embedding-8b`). The gateway must provide an OpenAI-compatible `/embeddings` endpoint.
-Only candidate text and the entry description are sent; historical entries are not used.
+Previously assigned work-entry descriptions are indexed as examples in a separate
+`time_entry_embeddings` table. Repeated descriptions within the same project reuse a vector. Suggestions
+use examples only from entries the requesting user may currently view, and never return their
+text. Current assignments and permissions are checked at query time; an entry being edited
+is excluded from its own examples.
 
 The database needs pgvector 0.8+ with HNSW support. The local and CI PostgreSQL images include it;
 for an existing production database, install pgvector before running `php artisan migrate`.
 The migration enables the extension, so its database user needs permission to do that.
 
 Use an asynchronous `QUEUE_CONNECTION` and a running `php artisan queue:work` worker.
-Run `php artisan embeddings:index` once to verify model access and queue existing projects
-and tasks. Laravel's scheduler runs `embeddings:index --recent` hourly, scanning
-projects, tasks and clients updated in the last hour using `updated_at` indexes.
+Run `php artisan embeddings:index` once to verify model access and queue existing projects,
+tasks and assigned entry descriptions. Laravel's scheduler runs `embeddings:index --recent`
+hourly, scanning
+projects, tasks, clients and time entries updated in the last hour using `updated_at` indexes.
 An input hash and model check skip unchanged embeddings before calling the gateway.
-Project/client name changes also refresh the affected tasks. Keep Laravel's scheduler running.
+Project/client name changes also refresh affected tasks and historical examples. Keep Laravel's scheduler running.
 If the scheduler misses an hour, run `php artisan embeddings:index` to catch up;
 unchanged records are skipped.
 The command can also rebuild all vectors after changing the model.
