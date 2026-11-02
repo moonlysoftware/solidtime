@@ -14,6 +14,11 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
+        $schedule->command('embeddings:index --recent')
+            ->hourly()
+            ->withoutOverlapping()
+            ->when(fn (): bool => (bool) config('services.gateway.key'));
+
         $schedule->command('time-entry:send-still-running-mails')
             ->when(fn (): bool => config('scheduling.tasks.time_entry_send_still_running_mails'))
             ->everyTenMinutes();

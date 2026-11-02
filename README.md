@@ -60,3 +60,28 @@ Looking to report a vulnerability? Please refer our [SECURITY.md](./SECURITY.md)
 ## License
 
 This project is open-source and available under the GNU Affero General Public License v3.0 (AGPL v3). Please see the [license file](LICENSE.md) for more information.
+
+### Project and task suggestions
+
+Suggestions use existing project/task/client names. Vectors live in a separate
+`project_task_embeddings` table; existing model fields are unchanged.
+Configure `GATEWAY_URL`, `GATEWAY_API_KEY`, and `GATEWAY_EMBEDDING_MODEL` (default:
+`qwen3-embedding-8b`). The gateway must provide an OpenAI-compatible `/embeddings` endpoint.
+Only candidate text and the entry description are sent; historical entries are not used.
+
+The database needs pgvector 0.8+ with HNSW support. The local and CI PostgreSQL images include it;
+for an existing production database, install pgvector before running `php artisan migrate`.
+The migration enables the extension, so its database user needs permission to do that.
+
+Use an asynchronous `QUEUE_CONNECTION` and a running `php artisan queue:work` worker.
+Run `php artisan embeddings:index` once to verify model access and queue existing projects
+and tasks. Laravel's scheduler runs `embeddings:index --recent` hourly, scanning
+projects, tasks and clients updated in the last hour using `updated_at` indexes.
+An input hash and model check skip unchanged embeddings before calling the gateway.
+Project/client name changes also refresh the affected tasks. Keep Laravel's scheduler running.
+If the scheduler misses an hour, run `php artisan embeddings:index` to catch up;
+unchanged records are skipped.
+The command can also rebuild all vectors after changing the model.
+
+Opening an entry's project/task picker shows up to five suggestions. Nothing is selected
+automatically, and the regular picker remains available if the gateway is unavailable.

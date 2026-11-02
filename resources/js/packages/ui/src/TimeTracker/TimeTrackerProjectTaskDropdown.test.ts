@@ -1,5 +1,5 @@
 /* eslint-disable vue/one-component-per-file */
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { defineComponent, h, nextTick, onMounted } from 'vue';
 import TimeTrackerProjectTaskDropdown from './TimeTrackerProjectTaskDropdown.vue';
@@ -58,6 +58,36 @@ async function openDropdown() {
 }
 
 describe('TimeTrackerProjectTaskDropdown', () => {
+    it('shows suggestions without changing the selection until clicked', async () => {
+        const suggestion = {
+            project_id: 'p-1',
+            project_name: 'Portal',
+            task_id: 't-1',
+            task_name: 'Login',
+        };
+        const suggest = vi.fn().mockResolvedValue([suggestion]);
+        const wrapper = mountDropdown({ description: 'Fix sign-in', suggest });
+        await flushPromises();
+        expect(suggest).toHaveBeenCalledWith('Fix sign-in');
+        expect(wrapper.emitted('changed')).toBeUndefined();
+        const button = wrapper.find('[data-testid="project-task-suggestion"]');
+        expect(button.text()).toContain('Portal');
+        expect(button.text()).toContain('Login');
+        await button.trigger('click');
+        expect(wrapper.emitted('changed')?.at(-1)).toEqual(['p-1', 't-1']);
+    });
+
+    it('keeps the normal picker available when suggestions fail', async () => {
+        const wrapper = mountDropdown({
+            description: 'Fix sign-in',
+            suggest: vi.fn().mockRejectedValue(new Error('Gateway unavailable')),
+        });
+        await flushPromises();
+        expect(wrapper.find('[data-testid="project-task-suggestion"]').exists()).toBe(false);
+        await wrapper.find('[data-project-id=""]').trigger('click');
+        expect(wrapper.emitted('changed')?.at(-1)).toEqual(['', null]);
+    });
+
     it('keeps the existing empty-string no-project value by default', async () => {
         const wrapper = await openDropdown();
 

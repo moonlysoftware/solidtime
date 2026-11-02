@@ -14,7 +14,7 @@ jobs:
 
     services:
       pgsql_test:
-        image: postgres:15
+        image: pgvector/pgvector:pg15
         env:
           PGPASSWORD: 'root'
           POSTGRES_DB: 'laravel'

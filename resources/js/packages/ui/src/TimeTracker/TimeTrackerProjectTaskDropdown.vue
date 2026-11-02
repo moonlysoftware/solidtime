@@ -3,6 +3,7 @@ import { ChevronRightIcon, ChevronDownIcon } from '@heroicons/vue/16/solid';
 import Dropdown from '@/packages/ui/src/Input/Dropdown.vue';
 import { computed, nextTick, ref, watch } from 'vue';
 import { useVirtualizer } from '@tanstack/vue-virtual';
+import type { ProjectTaskSuggestion } from '@/packages/ui/src/TimeTracker/projectTaskSuggestions';
 import ProjectDropdownItem from '@/packages/ui/src/Project/ProjectDropdownItem.vue';
 import type {
     CreateClientBody,
@@ -51,6 +52,8 @@ type ClientsWithProjectsWithTasks = ClientWithProjectsWithTasks[];
 
 const props = withDefaults(
     defineProps<{
+        description?: string | null;
+        suggest?: (description: string) => Promise<ProjectTaskSuggestion[]>;
         projects: Project[];
         tasks: Task[];
         clients: Client[];
@@ -68,6 +71,8 @@ const props = withDefaults(
         size?: 'default' | 'xs' | 'sm' | 'lg' | 'icon';
     }>(),
     {
+        description: null,
+        suggest: undefined,
         emptyPlaceholder: 'No Project',
         noProjectValue: NO_PROJECT_ID,
         variant: 'ghost',
@@ -75,6 +80,30 @@ const props = withDefaults(
         size: 'sm',
     }
 );
+
+const suggestions = ref<ProjectTaskSuggestion[]>([]);
+watch([open, () => props.description], async ([isOpen, description], _, onCleanup) => {
+    suggestions.value = [];
+    if (!isOpen || !description?.trim() || !props.suggest) return;
+    let active = true;
+    onCleanup(() => {
+        active = false;
+    });
+    try {
+        const result = await props.suggest(description);
+        if (active) suggestions.value = result;
+    } catch {
+        // The normal picker remains available when suggestions fail.
+    }
+});
+
+function selectSuggestion(suggestion: ProjectTaskSuggestion) {
+    project.value = suggestion.project_id;
+    task.value = suggestion.task_id;
+    open.value = false;
+    searchValue.value = '';
+    emit('changed', project.value, task.value);
+}
 
 const filteredResults = ref<ClientsWithProjectsWithTasks>([]);
 
@@ -602,6 +631,23 @@ const showCreateProject = ref(false);
                     @keydown.down.prevent="moveHighlightDown"
                     @keydown.right.prevent="expandProject"
                     @keydown.left.prevent="collapseProject" />
+                <div
+                    v-if="suggestions.length && !searchValue"
+                    class="border-b border-card-background-separator p-1">
+                    <div class="px-2 py-1 text-xs text-text-tertiary">Suggested</div>
+                    <button
+                        v-for="suggestion in suggestions"
+                        :key="suggestion.task_id ?? suggestion.project_id"
+                        type="button"
+                        data-testid="project-task-suggestion"
+                        class="block w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-card-background-active focus-visible:bg-card-background-active"
+                        @click="selectSuggestion(suggestion)">
+                        {{ suggestion.project_name
+                        }}<template v-if="suggestion.task_name">
+                            / {{ suggestion.task_name }}</template
+                        >
+                    </button>
+                </div>
                 <div
                     ref="dropdownViewport"
                     class="w-[400px] max-w-[calc(100vw-2rem)] max-h-[350px] overflow-y-scroll relative"

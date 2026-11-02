@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { suggestProjectsAndTasks } from '@/utils/projectTaskSuggestions';
 import TimeTrackerProjectTaskDropdown from '@/packages/ui/src/TimeTracker/TimeTrackerProjectTaskDropdown.vue';
 import TimeTrackerTagDropdown from '@/packages/ui/src/TimeTracker/TimeTrackerTagDropdown.vue';
 import BillableToggleButton from '@/packages/ui/src/Input/BillableToggleButton.vue';
@@ -43,6 +44,8 @@ function updateProject() {
 <template>
     <div class="flex items-center w-[130px] @2xl:w-auto shrink min-w-0">
         <TimeTrackerProjectTaskDropdown
+            :description="currentTimeEntry.description"
+            :suggest="suggestProjectsAndTasks"
             v-model:project="currentTimeEntry.project_id"
             v-model:task="currentTimeEntry.task_id"
             variant="outline"

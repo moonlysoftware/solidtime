@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { suggestProjectsAndTasks } from '@/utils/projectTaskSuggestions';
 import TextInput from '@/packages/ui/src/Input/TextInput.vue';
 import SecondaryButton from '@/packages/ui/src/Buttons/SecondaryButton.vue';
 import DialogModal from '@/packages/ui/src/DialogModal.vue';
@@ -154,6 +155,8 @@ const billableProxy = computed({
                     <TimeTrackerProjectTaskDropdown
                         v-model:project="timeEntry.project_id"
                         v-model:task="timeEntry.task_id"
+                        :description="timeEntry.description"
+                        :suggest="suggestProjectsAndTasks"
                         variant="input"
                         size="default"
                         :clients

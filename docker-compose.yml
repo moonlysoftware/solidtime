@@ -43,7 +43,7 @@ services:
         depends_on:
             - pgsql
     pgsql:
-        image: 'postgres:15'
+        image: 'pgvector/pgvector:pg15'
         ports:
             - '${FORWARD_DB_PORT:-5432}:5432'
         environment:
@@ -68,7 +68,7 @@ services:
             retries: 3
             timeout: 5s
     pgsql_test:
-        image: 'postgres:15'
+        image: 'pgvector/pgvector:pg15'
         environment:
             PGPASSWORD: '${DB_PASSWORD:-secret}'
             POSTGRES_DB: '${DB_DATABASE}'

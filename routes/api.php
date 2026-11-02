@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\V1\MemberController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\ProjectController;
 use App\Http\Controllers\Api\V1\ProjectMemberController;
+use App\Http\Controllers\Api\V1\ProjectTaskSuggestionController;
 use App\Http\Controllers\Api\V1\Public\ReportController as PublicReportController;
 use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\TagController;
@@ -92,6 +93,9 @@ Route::prefix('v1')->name('v1.')->group(static function (): void {
         });
 
         // Project routes
+        Route::post('/organizations/{organization}/project-task-suggestions', ProjectTaskSuggestionController::class)
+            ->middleware('throttle:30,1')->name('project-task-suggestions');
+
         Route::name('projects.')->prefix('/organizations/{organization}')->group(static function (): void {
             Route::get('/projects', [ProjectController::class, 'index'])->name('index');
             Route::get('/projects/{project}', [ProjectController::class, 'show'])->name('show');

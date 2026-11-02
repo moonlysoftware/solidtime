@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { suggestProjectsAndTasks } from '@/utils/projectTaskSuggestions';
 import MainContainer from '@/packages/ui/src/MainContainer.vue';
 import TimeTrackerStartStop from '@/packages/ui/src/TimeTrackerStartStop.vue';
 import TimeEntryRangeSelector from '@/packages/ui/src/TimeEntry/TimeEntryRangeSelector.vue';
@@ -169,6 +170,8 @@ async function handleDeleteTimeEntry() {
                                 :fix-date="breakFixDate"
                                 :fix-in-calendar="fixInCalendar" />
                             <TimeTrackerProjectTaskDropdown
+                                :description="timeEntry.description"
+                                :suggest="suggestProjectsAndTasks"
                                 v-if="!isBreak"
                                 class="min-w-0 shrink"
                                 :create-project
@@ -250,6 +253,8 @@ async function handleDeleteTimeEntry() {
                             <div class="flex items-center justify-between mt-1">
                                 <BreakLabel v-if="isBreak" class="pl-1.5 pr-2 min-w-0" />
                                 <TimeTrackerProjectTaskDropdown
+                                    :description="timeEntry.description"
+                                    :suggest="suggestProjectsAndTasks"
                                     v-else
                                     class="min-w-0"
                                     :create-project
